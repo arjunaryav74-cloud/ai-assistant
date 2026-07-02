@@ -34,6 +34,11 @@ export enum IpcChannel {
   OrbExpandedChanged = "orb:expandedChanged",
   /** Main broadcasts live drag velocity while the user is dragging the orb window. */
   OrbDragVelocity = "orb:dragVelocity",
+  /** Renderer-driven manual drag (the mini orb): move the window to an absolute
+   *  screen position every frame, then signal when the drag (+ momentum coast)
+   *  has finished so the final spot gets persisted. */
+  OrbDragMove = "orb:dragMove",
+  OrbDragEnd = "orb:dragEnd",
   // Preferences push
   PrefsChanged = "prefs:changed",
   // Prefs get/set (used by Settings tab — wired in Task 7)

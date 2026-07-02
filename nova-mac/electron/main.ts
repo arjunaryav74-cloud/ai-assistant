@@ -321,6 +321,26 @@ app.whenReady().then(async () => {
     lastMove = null;
   });
 
+  // Manual drag (the mini orb): the renderer owns the whole gesture — it
+  // reads its own window.screenX/screenY, computes the target position
+  // itself, and just tells us where to put the window every frame. This is
+  // deliberately NOT native OS window-dragging (-webkit-app-region: drag):
+  // that approach made the orb's own click handler unreliable (drag regions
+  // don't consistently deliver mouse events to the page) and gives zero
+  // control over feel (no momentum/easing). Position updates here are
+  // suppressed from the `moved` listener above so they don't double-persist —
+  // OrbDragEnd is the single point that marks the spot as user-chosen.
+  ipcMain.on(IpcChannel.OrbDragMove, (_e, { x, y }: { x: number; y: number }) => {
+    if (!orbWin || orbWin.isDestroyed()) return;
+    moveOrbProgrammatically(() => orbWin!.setPosition(Math.round(x), Math.round(y), false));
+  });
+  ipcMain.on(IpcChannel.OrbDragEnd, () => {
+    if (!orbWin || orbWin.isDestroyed()) return;
+    orbUserPositioned = true;
+    const { x, y } = orbWin.getBounds();
+    saveOrbPosition({ x, y });
+  });
+
   // If a monitor gets connected/disconnected/reconfigured, only reposition
   // when there's no user-chosen spot, or that spot fell off-screen.
   watchDisplayChanges(() => {

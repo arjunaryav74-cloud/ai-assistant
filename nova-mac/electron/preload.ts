@@ -65,6 +65,8 @@ contextBridge.exposeInMainWorld("nova", {
     ipcRenderer.on(IpcChannel.OrbDragVelocity, h);
     return () => ipcRenderer.removeListener(IpcChannel.OrbDragVelocity, h);
   },
+  orbDragMove: (x: number, y: number) => ipcRenderer.send(IpcChannel.OrbDragMove, { x, y }),
+  orbDragEnd: () => ipcRenderer.send(IpcChannel.OrbDragEnd),
   appOpen: () => ipcRenderer.send(IpcChannel.AppOpen),
   appClose: () => ipcRenderer.send(IpcChannel.AppClose),
   onPrefsChanged: (cb: (p: unknown) => void): (() => void) => {

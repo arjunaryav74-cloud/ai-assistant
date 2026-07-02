@@ -75,29 +75,43 @@ with `orbArmedForAutoHide` in `main.ts`:
 custom position is set, main resizes/positions top-right-anchored via `resizeOrb`/
 `positionOrbTopRight` (`window.ts`) and broadcasts `IpcChannel.OrbExpandedChanged`.
 
-**Dragging**: `MiniOrb.tsx` marks its whole window `WebkitAppRegion: "drag"` (Chromium still
-delivers the underlying mousedown/mouseup to React even inside a drag region, so a movement
-threshold in the component tells a click from a drag) and the expanded panel's icon-button strip
-is a drag region too. `main.ts` listens for the window's native `moved` event to detect *real*
-user drags — `orbMoveIsProgrammatic` + `moveOrbProgrammatically()` suppress the `moved` events
-our own `positionOrbTopRight`/`resizeOrb`/`setPosition` calls trigger, since Electron fires
-`moved` for programmatic changes too and there's no other way to tell them apart. Once a real
-drag is detected, `orbUserPositioned` flips on and the spot is persisted via
-`electron/orb-position-store.ts` (plain JSON under `userData`, restored on next launch);
-`positionOrb()` becomes a no-op as long as `isPointOnAnyDisplay` says that spot is still on
-some connected display. `watchDisplayChanges` (called once on `orbWin` in `main.ts`) falls back
-to the default top-right corner and clears `orbUserPositioned` if a monitor change leaves the
-saved spot off-screen.
+**Dragging the mini orb is fully custom JS, not a native OS drag region**
+(`src/hooks/useDraggableOrb.ts`). `-webkit-app-region: drag` + a click handler on the same
+element was tried first and is unreliable in Electron — once the OS takes over a drag region,
+the page stops consistently receiving the mouse events a click handler needs, so clicking the
+orb silently broke. Instead `MiniOrb.tsx` is `WebkitAppRegion: "no-drag"` and does the whole
+gesture itself: on mousedown it reads its own `window.screenX/screenY` as the drag origin,
+tracks `mousemove` at the document level, and once movement crosses a small threshold sends
+`IpcChannel.OrbDragMove {x, y}` (absolute target position) on every frame — `main.ts` just calls
+`orbWin.setPosition(x, y)`. A mouseup with no real movement never touches the window at all and
+calls `onClick` directly; a real drag ends with a brief momentum coast (~170ms, exponential
+velocity decay) so it slides a little past release instead of stopping dead, then sends
+`IpcChannel.OrbDragEnd` once the coast settles. That's the single point where `orbUserPositioned`
+flips on and the spot is persisted via `electron/orb-position-store.ts` (plain JSON under
+`userData`, restored on next launch); `positionOrb()` becomes a no-op as long as
+`isPointOnAnyDisplay` says that spot is still on some connected display. `watchDisplayChanges`
+(called once on `orbWin` in `main.ts`) falls back to the default top-right corner and clears
+`orbUserPositioned` if a monitor change leaves the saved spot off-screen.
 
-**Jelly wiggle while dragging**: separately from `moved`, `main.ts` also listens to the
-cross-platform `move` event (fires continuously *during* a drag, unlike `moved`) to compute
-live velocity and broadcast it as `IpcChannel.OrbDragVelocity`. `useOrbDragWiggle`
-(`src/hooks/useOrbDragWiggle.ts`) turns that into a squash-and-stretch transform — pure math in
-`velocityToWiggle()` (tested in isolation, no React/DOM needed) stretches the orb along the
-direction of motion and squashes it perpendicular, capped so it can't grow enough to clip its
-window; the hook self-decays back to neutral if no new velocity tick arrives within 140ms. Both
-`MiniOrb.tsx` and the expanded panel's orb (`Orb.tsx`) wrap `VoiceOrb` in a `motion.div` driven
-by this hook with `jellySpring` (`src/motion/springs.ts`) for the bouncy settle.
+The expanded panel's icon-button strip is still a native `WebkitAppRegion: "drag"` region (its
+buttons are separately marked `no-drag`, which — unlike a drag region with a raw click handler
+directly on it — reliably stays clickable, so it never had the mini-orb's bug). `main.ts` still
+tracks that path via the native `moved`/`move` events; `orbMoveIsProgrammatic` +
+`moveOrbProgrammatically()` suppress the events our own `positionOrbTopRight`/`resizeOrb`/
+`setPosition`/`OrbDragMove` calls trigger, since Electron fires them for programmatic changes
+too and there's no other way to tell them apart from a real drag.
+
+**Jelly wiggle while dragging**: `main.ts`'s native `move` listener (panel drags) broadcasts live
+velocity as `IpcChannel.OrbDragVelocity`; the mini orb's manual drag computes velocity locally
+instead and never needs that broadcast. Both feed into the same pure `velocityToWiggle()`
+(`src/hooks/useOrbDragWiggle.ts`, tested in isolation, no React/DOM needed), which turns
+velocity into a squash-and-stretch transform — stretched along the direction of motion, squashed
+perpendicular, capped so it can't grow enough to clip its window. `useWiggleState()` exposes
+`{wiggle, reportVelocity}` so either source can drive it and self-decays to neutral if no new
+report arrives within 140ms; `useOrbDragWiggle()` is a thin wrapper over it that sources from the
+IPC broadcast (used by the panel). Both `MiniOrb.tsx` and `Orb.tsx` wrap `VoiceOrb` in a
+`motion.div` animated by the resulting wiggle with `jellySpring` (`src/motion/springs.ts`) for
+the bouncy settle.
 
 Voice turns (listening/thinking/speaking/barge-in) **never**
 auto-expand the panel — the orb's own color is the only feedback while it stays a corner orb;
