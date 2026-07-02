@@ -223,7 +223,7 @@ export class VoicePlayer {
           while (playIndex < pendingSentences.length) {
             if (controller.signal.aborted) return;
 
-            ensurePrefetch(2);
+            ensurePrefetch(3);
             const text = pendingSentences[playIndex]!;
             if (text === lastPlayedText) {
               playIndex++;
@@ -264,7 +264,11 @@ export class VoicePlayer {
         return;
       }
       pendingSentences.push(trimmed);
-      ensurePrefetch(2);
+      // Prefetch 3 sentences ahead (was 2) — synthesis latency variance was
+      // occasionally catching up to playback and causing an audible gap
+      // between sentences, which read as "slow" even though each individual
+      // chunk was already streaming.
+      ensurePrefetch(3);
       void pump();
     };
 

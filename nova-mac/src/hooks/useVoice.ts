@@ -19,8 +19,12 @@ const MAX_RECORDING_MS = 30_000;
  *  as real speech, not a brief noise blip (door, cough, wake-word tail) —
  *  otherwise a single loud frame immediately after a false wake triggers a
  *  short, near-silent recording that STT models are prone to hallucinating
- *  plausible-sounding text for. */
-const MIN_SUSTAINED_SPEECH_MS = 250;
+ *  plausible-sounding text for. Kept short: short spoken words (like "stop")
+ *  have natural mid-word amplitude dips against a level meter, and 250ms of
+ *  *unbroken* continuity was long enough to swallow them as "just a blip"
+ *  before they ever reached the mic — a real command, including kill words,
+ *  going completely unheard. */
+const MIN_SUSTAINED_SPEECH_MS = 120;
 
 /** Map listening sensitivity (0 strict … 1 sensitive) to a speech level threshold. */
 function speechThreshold(sensitivity: number): number {
@@ -150,14 +154,15 @@ export function useVoice(): {
 
     const offWake = nova().onWakeDetected(() => {
       if (!cancelledRef.current) {
-        if (prefs.current.instantAckMode !== "off") cue("wake");
+        if (prefs.current.instantAckMode !== "off") cue("listening");
         void runTurn();
       }
     });
 
-    // Timer fired (from the set_timer tool): chime + transient announcement.
+    // Timer fired (from the set_timer tool): the OS notification already
+    // carries its own sound — no separate earcon, to keep the audio cue
+    // vocabulary to exactly listening/finished/error.
     const offTimer = nova().onTimerFired?.((p) => {
-      cue("timer");
       dispatch({ type: "notice", message: `Timer done — ${p.label}` });
       setTimeout(() => dispatch({ type: "dismiss" }), 7000);
     });
@@ -267,7 +272,7 @@ export function useVoice(): {
       }
 
       // Acknowledge that we heard them the moment recording closes.
-      cue("gotIt");
+      cue("finished");
 
       let transcript = "";
       try {
@@ -303,7 +308,7 @@ export function useVoice(): {
         return;
       }
       if (isVoiceStopPhrase(sanitized)) {
-        cue("gotIt");
+        cue("finished");
         dispatch({ type: "dismiss" });
         endTurn();
         return;
@@ -336,7 +341,9 @@ export function useVoice(): {
           bargeInFired = true;
           player.current.stop();
           nova().chatCancel(id);
-          cue("bargeIn");
+          // Barge-in reopens the mic for a new turn — same "listening" cue
+          // as a fresh wake, not a distinct sound of its own.
+          cue("listening");
           dispatch({ type: "bargeIn" });
           void runTurn();
         });
@@ -347,7 +354,9 @@ export function useVoice(): {
         if (p.requestId !== id) return;
         if (firstDelta) {
           firstDelta = false;
-          cue("reply"); // soft blip as the reply actually starts (thinking → speaking)
+          // No cue here — the orb's color already shows the thinking →
+          // speaking transition, and a chime here isn't one of the three
+          // (listening/finished/error) the audio cues are meant to cover.
         }
         dispatch({ type: "responseDelta", delta: p.delta });
         speaker?.feed(p.delta);

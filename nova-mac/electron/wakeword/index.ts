@@ -2,7 +2,7 @@ import { Worker } from "node:worker_threads";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const DEBOUNCE_MS = 2000;
+const DEBOUNCE_MS = 3000;
 
 /**
  * Maps the Settings "Wake word sensitivity" slider (0.35 strict … 0.85
@@ -86,5 +86,17 @@ export class WakeWordController {
 
   setEnabled(on: boolean): void { this.enabled = on; }
   pauseForTurn(): void { this.pausedForTurn = true; }
-  resume(): void { this.pausedForTurn = false; this.armed = true; }
+  /**
+   * Resume ingesting frames — but do NOT force re-arm. Score processing is
+   * skipped entirely while paused, so `armed` is frozen at whatever it was
+   * the moment the last wake fired (false). Blindly resetting it to true
+   * here meant that if the sound that caused the false wake was still
+   * ringing (persistent background noise/TV/conversation, not a one-off
+   * blip), the very next score message — often within a frame or two of
+   * resuming — could immediately pass threshold again and fire, producing
+   * a tight repeat loop that kept "hearing" things nobody said. Now it only
+   * re-arms the normal way, in handleScore, once the score has genuinely
+   * dropped back below threshold at least once after resuming.
+   */
+  resume(): void { this.pausedForTurn = false; }
 }

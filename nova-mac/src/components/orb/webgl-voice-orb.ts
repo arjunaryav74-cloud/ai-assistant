@@ -10,9 +10,14 @@ export type OrbVisualState = "idle" | "listening" | "thinking" | "speaking" | "b
 
 const STATE_COLORS: Record<OrbVisualState, [number, number, number]> = {
   idle: [0.6, 0.61, 0.64],
-  listening: [0.04, 0.52, 1.0], // macOS system blue (#0A84FF), matches --nova-accent
+  // Blue and green were too close in hue once the shader's white rim-light/
+  // glow blending washed them out — speaking's 0.55 blue channel pulled it
+  // toward teal, sharing "coolness" with blue. Pushed to unambiguous,
+  // maximally-separated hues: pure blue (near-zero green/red) vs. pure green
+  // (blue channel cut way down so it can't drift toward cyan/teal).
+  listening: [0.0, 0.4, 1.0], // vivid blue
   thinking: [0.62, 0.36, 1.0],
-  speaking: [0.2, 0.9, 0.55],
+  speaking: [0.1, 0.95, 0.2], // vivid green, minimal blue so it can't read as teal
   bargein: [1.0, 0.55, 0.15],
 };
 

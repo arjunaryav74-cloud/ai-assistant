@@ -1,15 +1,20 @@
 /**
  * Synthesized audio cues (no assets — pure Web Audio oscillators).
  *
- * wake     — bright rising two-tone: "I'm listening"
- * gotIt    — short soft tick: recording captured, thinking now
- * reply    — subtle low blip right before TTS starts
- * bargeIn  — quick muted tick: interruption registered
- * error    — low double buzz
- * timer    — three-note chime
+ * Deliberately exactly three cues — one per moment the user actually needs
+ * audible feedback for: the mic opening, the mic closing, and something
+ * going wrong. Every other transition (thinking, TTS starting, barge-in)
+ * already has its own orb color, so a distinct chime for each of those was
+ * extra noise on top of noise the user was already trying to listen through.
+ *
+ * listening — starts recording (wake word fired, or barge-in interrupts TTS
+ *             to start a new turn): bright rising two-tone
+ * finished  — stops recording (silence detected, kill phrase heard):
+ *             short soft tick
+ * error     — something failed (mic, transcription, chat): low double buzz
  */
 
-export type CueName = "wake" | "gotIt" | "reply" | "bargeIn" | "error" | "timer";
+export type CueName = "listening" | "finished" | "error";
 
 let ctx: AudioContext | null = null;
 
@@ -29,21 +34,14 @@ interface Note {
 }
 
 const CUES: Record<CueName, Note[]> = {
-  wake: [
+  listening: [
     { freq: 660, at: 0, duration: 0.09, gain: 0.16 },
     { freq: 990, at: 0.08, duration: 0.14, gain: 0.18 },
   ],
-  gotIt: [{ freq: 880, at: 0, duration: 0.06, gain: 0.1 }],
-  reply: [{ freq: 520, at: 0, duration: 0.07, gain: 0.08 }],
-  bargeIn: [{ freq: 740, at: 0, duration: 0.05, gain: 0.12, type: "triangle" }],
+  finished: [{ freq: 880, at: 0, duration: 0.06, gain: 0.1 }],
   error: [
     { freq: 220, at: 0, duration: 0.12, gain: 0.14, type: "square" },
     { freq: 180, at: 0.15, duration: 0.16, gain: 0.12, type: "square" },
-  ],
-  timer: [
-    { freq: 784, at: 0, duration: 0.16, gain: 0.2 },
-    { freq: 988, at: 0.18, duration: 0.16, gain: 0.2 },
-    { freq: 1175, at: 0.36, duration: 0.28, gain: 0.22 },
   ],
 };
 
@@ -70,7 +68,7 @@ export function playCue(name: CueName): void {
   }
 }
 
-/** Back-compat: the original single ack earcon maps to the wake cue. */
+/** Back-compat: the original single ack earcon maps to the listening cue. */
 export async function playEarcon(): Promise<void> {
-  playCue("wake");
+  playCue("listening");
 }

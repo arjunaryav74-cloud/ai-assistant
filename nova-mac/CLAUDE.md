@@ -183,7 +183,21 @@ don't load at startup.
 - `dotenv` loads `.env.local` then `.env` **at the very top** before anything reads
   `process.env` — electron-vite does not auto-load env for the main process.
 - Tray-only: `app.dock?.hide()`, `window-all-closed` is a no-op (app keeps running).
-- Global hotkey `Cmd+Shift+Space` toggles the orb window.
+- Global hotkey `Cmd+Shift+Space` toggles the orb window. When the window isn't visible at all,
+  it must jump straight to the final expanded bounds (`positionOrb(true)` + `show()`) rather than
+  *also* running the animated `resizeOrb` on top — that combination computes its animation
+  assuming the window is still mini-sized when it was just placed directly at panel size,
+  producing a visible jump to a wrong position. The `OrbSetExpanded` IPC handler (used by the
+  orb's own ⚙/expand click) has the same not-visible branch for the same reason; the hotkey had
+  an unfixed copy of this bug for a while after the click path was fixed.
+- `src/styles/glass.css` sets `background: transparent` (and a definite `height: 100%`) on
+  `html`, `body`, *and* `#root`. The orb window is `transparent:true, backgroundColor:
+  "#00000000"`, but `index.html`'s inline style only covered `<body>`; with `<html>`/`#root` left
+  with no explicit background *or* height, and their only descendants being
+  `position:absolute`-pinned (`MiniOrb.tsx`/`Orb.tsx` use `orbBoxPosition`), both collapsed to
+  `height:auto` (~0), and `body`'s `overflow:hidden` then clipped to that near-zero box —
+  a real, if narrow, gap through which the window's raw (opaque) backing could show, especially
+  during a resize.
 - `nova://` deep-link protocol: `open-url` routes:
   - `nova://auth-callback` → `handleAuthCallback` (Supabase magic-link)
   - `nova://connections-callback` → `handleConnectionsCallback` (Google OAuth token exchange)
@@ -214,7 +228,7 @@ the API keys).
 
 ```
 wake word fires (main)  ──activateOrb + IPC WakeDetected──▶  useVoice.runTurn()
-  orb: summon → listening          (wake cue plays unless instantAckMode === "off")
+  orb: summon → listening          (listening cue plays unless instantAckMode === "off")
   recordUntilSilence(stream)       // MediaRecorder until VAD silence (prefs.silenceMs)
   ──IPC transcribe──▶ electron/voice/stt.ts (OpenAI Whisper/gpt-4o-transcribe)
   sanitizeTranscript() + isVoiceStopPhrase()   // drop hallucinated noise / kill words silently
@@ -238,29 +252,42 @@ wake word fires (main)  ──activateOrb + IPC WakeDetected──▶  useVoice.
   `sanitizeTranscript()` in `useVoice.ts` before it ever reaches Claude. An empty result means
   STT hallucinated on background noise/silence — dropped silently, no sound, no chat call.
   `isVoiceStopPhrase()` catches dismissals ("stop", "that'll be all", "thank you very much",
-  etc.) — acknowledged with the `gotIt` cue and the turn ends without calling Claude at all.
+  etc.) — acknowledged with the `finished` cue and the turn ends without calling Claude at all.
 - **WebGL VoiceOrb** (`src/components/orb/webgl-voice-orb.ts` + `VoiceOrb.tsx` wrapper): a
   fluid-noise plasma sphere (ported from a user-supplied reference). Fixed 5-color scheme, each
   an explicit, non-negotiable mapping (not derived/blended): idle=grey, **listening=blue**
-  (`#0A84FF`, matches `--nova-accent`), thinking=purple, speaking=green, bargein=orange. Earlier
-  this collapsed `listening` into `idle` ("still listening reads as calm/grey") — that was wrong;
-  the whole point of a distinct listening color is telling the user Nova is actively hearing them
-  apart from just sitting idle. `VoiceOrb`'s 6-value `visualMode` maps `"processing"` onto the
-  same purple as `"thinking"` (both read as "working on it") and everything else 1:1. Colors
-  lerp at rate 0.45/frame — started at 0.06 (~1s to visually "arrive"), 0.22 was still visibly
-  laggy against how fast state actually changes; needs to read as real-time feedback of what's
-  happening right now, not catch up after the fact. Same external API as the old Canvas2D orb it
-  replaced.
+  (`#0A84FF`-ish, matches `--nova-accent`), thinking=purple, **speaking=green**, bargein=orange.
+  Earlier this collapsed `listening` into `idle` ("still listening reads as calm/grey") — that
+  was wrong; the whole point of a distinct listening color is telling the user Nova is actively
+  hearing them apart from just sitting idle. `listening`/`speaking` were later pushed to purer,
+  maximally-separated RGB values (`[0,0.4,1]` / `[0.1,0.95,0.2]`) — the original speaking green
+  had a high enough blue channel (0.55) to read as teal once the shader's glow/fresnel blending
+  washed it out, making it look too close to listening's blue. `VoiceOrb`'s 6-value `visualMode`
+  maps `"processing"` onto the same purple as `"thinking"` (both read as "working on it") and
+  everything else 1:1. Colors lerp at rate 0.45/frame — started at 0.06 (~1s to visually
+  "arrive"), 0.22 was still visibly laggy against how fast state actually changes; needs to read
+  as real-time feedback of what's happening right now, not catch up after the fact. Same
+  external API as the old Canvas2D orb it replaced.
 - **Streaming TTS** (`src/voice/player.ts`): a `SentenceBuffer` chunks the streamed reply into
-  sentences; chunks are synthesized ahead (prefetch depth 2) and scheduled gaplessly on a
-  Web Audio timeline. `stop()`/barge-in aborts in-flight synth + sources.
+  sentences; chunks are synthesized ahead (prefetch depth 3, was 2 — synthesis latency variance
+  could catch up to playback and cause an audible gap between sentences) and scheduled gaplessly
+  on a Web Audio timeline. `stop()`/barge-in aborts in-flight synth + sources. STT
+  (`electron/voice/stt.ts`) defaults to `gpt-4o-mini-transcribe` (was `gpt-4o-transcribe`) —
+  meaningfully lower latency on the short spoken-command audio this app almost always sends, at
+  a small accuracy cost worth it for turn speed. True streaming (word-by-word partial) STT would
+  require swapping the batch record-then-POST flow for a WebSocket realtime STT API — out of
+  scope as an incremental fix, noted here as the real next step if latency is still a problem.
 - **Voice preferences** come from Supabase `user_preferences.voice` (JSONB) merged over
   `DEFAULT_VOICE_PREFERENCES` in `shared/types.ts`. Default interaction mode is `wake_word`.
 - **Error states**: mic unavailable, recording failure, empty transcript, and chat errors all
   dispatch `{ type: "error", message }` → 2.5s auto-dismiss (not silent).
-- **Audio cues** (`src/voice/earcon.ts`): oscillator-synthesized cues (`wake`, `gotIt`,
-  `reply`, `bargeIn`, `error`, `timer`) played at each turn stage; gated by
-  `prefs.audioCuesEnabled`.
+- **Audio cues** (`src/voice/earcon.ts`): exactly three oscillator-synthesized cues —
+  `listening` (mic opens: wake fires, or barge-in reopens it for a new turn), `finished` (mic
+  closes: silence detected or a kill phrase heard), `error`. Deliberately collapsed from a
+  6-cue set (`wake`/`gotIt`/`reply`/`bargeIn`/`error`/`timer`) — every other transition already
+  has its own orb color, so a distinct chime per state was extra noise on top of the noise the
+  user was trying to listen through. The timer-fired notification relies on the OS notification's
+  own sound instead of a dedicated earcon. Gated by `prefs.audioCuesEnabled`.
 - **Tool progress**: main emits `IpcChannel.ChatToolUse` `{requestId, toolName, step}` before
   each tool round; `useVoice` dispatches `startWorking` so the orb shows the friendly step label
   (labels in `TOOL_STEP_LABELS`, `electron/chat-turn.ts`). The next `ChatDelta` auto-returns
@@ -376,8 +403,17 @@ produces near-zero scores rather than an error, so the exact contract matters:
   emits **Int16, 16 kHz mono, 1280-sample (~80 ms) frames** (`SAMPLES_PER_FRAME` in
   `shared/wake-constants.ts`) over `IpcChannel.WakeAudioFrame`.
 - `electron/wakeword/index.ts` (`WakeWordController`, main thread): forwards frames to the
-  worker, applies a fire threshold, debounce, and an arm/re-arm gate; pauses during a voice turn
-  and resumes on `voiceTurnEnded`. The threshold is **not** a fixed default — the wake engine
+  worker, applies a fire threshold, debounce (`DEBOUNCE_MS = 3000`, was 2000 — too short a gap
+  let a still-loud room re-fire almost immediately after the turn it just caused ended), and an
+  arm/re-arm gate; pauses during a voice turn and resumes on `voiceTurnEnded`. `resume()`
+  deliberately does **not** force `armed = true` — score processing is skipped entirely while
+  paused, so `armed` stays at whatever it was when the last wake fired (`false`); force-resetting
+  it here meant that if the sound that caused the false wake was still ringing (persistent
+  background noise/TV/conversation, not a one-off blip), the very next score message after
+  resuming — often within a frame or two — could pass threshold again immediately, producing a
+  tight repeat-fire loop that kept "hearing" things nobody said. It now only re-arms the normal
+  way, in `handleScore`, once the score has genuinely dropped back below threshold at least once
+  after resuming. The threshold is **not** a fixed default — the wake engine
   runs in the main process, but the "Wake word sensitivity" slider lives in the renderer's
   Settings page, so it has to be pushed across: `wakeSensitivityToThreshold()` (pure, tested)
   maps the slider's sense (higher = fires easier) onto the engine's inverted one (score must
@@ -396,11 +432,14 @@ produces near-zero scores rather than an error, so the exact contract matters:
   would otherwise land on a threshold low enough to false-trigger on background noise the moment
   it started actually working.
 - `src/hooks/useVoice.ts`'s `recordUntilSilence` requires mic level to stay continuously above
-  threshold for `MIN_SUSTAINED_SPEECH_MS` (250ms) before treating it as real speech, not a single
-  noise blip (door, cough, a wake-word false-fire's own tail) — otherwise a one-frame spike
-  immediately produces a short, near-silent recording that STT models are prone to hallucinating
-  plausible-sounding but entirely fabricated text for, which then gets sent to Claude as if the
-  user said it.
+  threshold for `MIN_SUSTAINED_SPEECH_MS` (**120ms**, was 250ms) before treating it as real
+  speech, not a single noise blip (door, cough, a wake-word false-fire's own tail) — otherwise a
+  one-frame spike immediately produces a short, near-silent recording that STT models are prone
+  to hallucinating plausible-sounding but entirely fabricated text for, which then gets sent to
+  Claude as if the user said it. 250ms was found to be too aggressive in the other direction:
+  short spoken words (including kill words like "stop") have natural mid-word amplitude dips, so
+  250ms of *unbroken* continuity could swallow a real command as "just a blip" before it ever
+  reached the mic, which is what made kill words appear not to work at all.
 - `electron/wakeword/worker.ts` + `engine.ts`: three-stage ONNX pipeline
   `melspectrogram.onnx → embedding_model.onnx → hey_jarvis_v0.1.onnx`. **Preprocessing the
   models were trained on (all four are required or scores flatline near 0):**

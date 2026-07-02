@@ -1,3 +1,21 @@
+/* The orb window is transparent:true with backgroundColor "#00000000", but
+   only <body> (inline in index.html) was ever told background:transparent —
+   <html> and #root were left with no explicit background *or* height. <html>
+   happens to cover the viewport by default, but <body> and #root do not:
+   with no ancestor giving them a definite height, both collapse to
+   height:auto (~0, since their only descendants are position:absolute), and
+   body's inline `overflow:hidden` then clips to that ~0px box. Every orb/
+   panel component pins itself with `height: "100%"` (MiniOrb.tsx, Orb.tsx)
+   expecting that to resolve against a real pixel height — instead it
+   resolves against an indefinite ancestor, which is exactly the kind of gap
+   that can show the raw (non-transparent) window backing at the edges during
+   a live resize instead of the intended fully-transparent canvas. */
+html, body, #root {
+  height: 100%;
+  margin: 0;
+  background: transparent;
+}
+
 :root {
   --nova-bg: #080808;
   --nova-surface: rgb(16 16 16 / 88%);
