@@ -103,6 +103,18 @@ fixed pixel position (`orbBoxPosition`, not flex/percentage-centered) for the sa
 it may still be mounted while the window animates toward the panel size, a centered layout would
 visibly drift toward the growing window's live center.
 
+The `OrbSetExpanded(true, manual)` handler has a special case for a window that's currently
+**hidden entirely** (not just mini) — it appears directly at the final expanded bounds instead
+of also running the animated resize afterward. That second part used to be a real bug: it fell
+through into `setOrbExpanded`'s animated `resizeOrb`, whose math assumed the window was still
+mini-sized, when it had in fact just been jumped straight to panel size a moment earlier by
+`positionOrb(true)` — a genuine double-resize conflict producing visible jank on top of whatever
+the animation was already doing. `createOrbWindow` also deliberately does **not** set
+`resizable: false` — a frameless window has no OS resize handles to disable regardless, and that
+flag maps to `NSWindowStyleMaskResizable`, which has been known to interfere with purely
+programmatic `setBounds` on some Electron/macOS combinations; since the entire mini↔panel
+transition is driven by `setBounds`, it needs to be unconstrained.
+
 `moveOrbProgrammatically` (`main.ts`) accepts either a sync callback or (for the animated resize)
 a `Promise`, awaiting it so the "was this move programmatic" suppression window tracks the
 *actual* operation instead of guessing a fixed timeout long enough to outlast it.
@@ -228,12 +240,17 @@ wake word fires (main)  ──activateOrb + IPC WakeDetected──▶  useVoice.
   `isVoiceStopPhrase()` catches dismissals ("stop", "that'll be all", "thank you very much",
   etc.) — acknowledged with the `gotIt` cue and the turn ends without calling Claude at all.
 - **WebGL VoiceOrb** (`src/components/orb/webgl-voice-orb.ts` + `VoiceOrb.tsx` wrapper): a
-  fluid-noise plasma sphere (ported from a user-supplied reference), 4 color states — idle=grey,
-  thinking=purple, speaking=green, bargein=orange — smoothly lerped (rate 0.45/frame; started at
-  0.06, felt like it took ~1s to "arrive", then 0.22 was still visibly laggy against how fast
-  state actually changes — the color has to read as real-time feedback of what's happening right
-  now, not catch up after the fact). `VoiceOrb`'s 6-value `visualMode` collapses onto these 4;
-  `listening` reads as idle. Same external API as the old Canvas2D orb it replaced.
+  fluid-noise plasma sphere (ported from a user-supplied reference). Fixed 5-color scheme, each
+  an explicit, non-negotiable mapping (not derived/blended): idle=grey, **listening=blue**
+  (`#0A84FF`, matches `--nova-accent`), thinking=purple, speaking=green, bargein=orange. Earlier
+  this collapsed `listening` into `idle` ("still listening reads as calm/grey") — that was wrong;
+  the whole point of a distinct listening color is telling the user Nova is actively hearing them
+  apart from just sitting idle. `VoiceOrb`'s 6-value `visualMode` maps `"processing"` onto the
+  same purple as `"thinking"` (both read as "working on it") and everything else 1:1. Colors
+  lerp at rate 0.45/frame — started at 0.06 (~1s to visually "arrive"), 0.22 was still visibly
+  laggy against how fast state actually changes; needs to read as real-time feedback of what's
+  happening right now, not catch up after the fact. Same external API as the old Canvas2D orb it
+  replaced.
 - **Streaming TTS** (`src/voice/player.ts`): a `SentenceBuffer` chunks the streamed reply into
   sentences; chunks are synthesized ahead (prefetch depth 2) and scheduled gaplessly on a
   Web Audio timeline. `stop()`/barge-in aborts in-flight synth + sources.

@@ -4,7 +4,7 @@
  *
  * Usage: npm run db:migrate
  */
-import { readFileSync } from "fs";
+import { readFileSync, readdirSync } from "fs";
 import { join, dirname } from "path";
 import { fileURLToPath } from "url";
 import pg from "pg";
@@ -46,21 +46,21 @@ async function main() {
   const client = new pg.Client({ connectionString, ssl: { rejectUnauthorized: false } });
   await client.connect();
 
-  const migrations = [
-    "001_initial_schema.sql",
-    "002_pg_trgm_index.sql",
-    "003_reminder_lifecycle.sql",
-    "004_auth_rls.sql",
-    "005_google_oauth_tokens.sql",
-    "006_google_services.sql",
-    "007_youtube_taste_cache.sql",
-    "008_push_subscriptions.sql",
-    "009_thread_sections.sql",
-    "010_message_fk_on_delete_set_null.sql",
-  ];
+  // Read the migrations directory directly instead of a hand-maintained
+  // list — a hardcoded array silently stops covering new migrations the
+  // moment someone forgets to add a line to it. That happened here: this
+  // list stopped at 010 while the repo had migrations up to 017, so
+  // `npm run db:migrate` had never actually applied 011-017 for anyone,
+  // including 017_user_preferences_voice.sql (the column nova-mac's
+  // Settings save depends on) — a silent gap with no error at migration
+  // time, just a confusing "column does not exist" much later at read time.
+  const migrationsDir = join(__dirname, "..", "supabase", "migrations");
+  const migrations = readdirSync(migrationsDir)
+    .filter((f) => f.endsWith(".sql"))
+    .sort();
 
   for (const file of migrations) {
-    const sql = readFileSync(join(__dirname, "..", "supabase", "migrations", file), "utf8");
+    const sql = readFileSync(join(migrationsDir, file), "utf8");
     console.log(`Applying ${file}...`);
     try {
       await client.query(sql);

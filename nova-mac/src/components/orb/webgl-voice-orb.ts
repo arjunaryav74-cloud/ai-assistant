@@ -2,14 +2,15 @@
  * WebGLVoiceOrb — a floating, animated WebGL orb for voice-assistant UIs.
  * Ported from the user-supplied orb.js reference (fluid plasma sphere, transparent bg).
  *
- * States: 'idle' (grey, listening/wake) | 'thinking' (purple) | 'speaking' (green)
- * | 'bargein' (orange, user interrupted).
+ * Explicit, fixed color scheme (never derived/blended): grey = idle,
+ * blue = listening, purple = thinking, green = speaking, orange = barge-in.
  */
 
-export type OrbVisualState = "idle" | "thinking" | "speaking" | "bargein";
+export type OrbVisualState = "idle" | "listening" | "thinking" | "speaking" | "bargein";
 
 const STATE_COLORS: Record<OrbVisualState, [number, number, number]> = {
   idle: [0.6, 0.61, 0.64],
+  listening: [0.04, 0.52, 1.0], // macOS system blue (#0A84FF), matches --nova-accent
   thinking: [0.62, 0.36, 1.0],
   speaking: [0.2, 0.9, 0.55],
   bargein: [1.0, 0.55, 0.15],
@@ -25,6 +26,7 @@ interface Motion {
 
 const STATE_MOTION: Record<OrbVisualState, Motion> = {
   idle: { swirl: 0.16, pulseSpeed: 1.2, pulseAmt: 0.05, glow: 1.0, flicker: 0.35 },
+  listening: { swirl: 0.24, pulseSpeed: 1.8, pulseAmt: 0.08, glow: 1.15, flicker: 0.5 },
   thinking: { swirl: 0.46, pulseSpeed: 2.6, pulseAmt: 0.09, glow: 1.15, flicker: 0.55 },
   speaking: { swirl: 0.3, pulseSpeed: 6.0, pulseAmt: 0.16, glow: 1.35, flicker: 0.75 },
   bargein: { swirl: 0.6, pulseSpeed: 8.0, pulseAmt: 0.22, glow: 1.55, flicker: 0.9 },
@@ -32,6 +34,7 @@ const STATE_MOTION: Record<OrbVisualState, Motion> = {
 
 const STATE_BREATHE: Record<OrbVisualState, { duration: number; scale: number }> = {
   idle: { duration: 4.2, scale: 1.02 },
+  listening: { duration: 2.8, scale: 1.026 },
   thinking: { duration: 2.0, scale: 1.028 },
   speaking: { duration: 1.3, scale: 1.016 },
   bargein: { duration: 0.85, scale: 1.035 },

@@ -146,7 +146,12 @@ export function createOrbWindow(): BrowserWindow {
     backgroundColor: "#00000000",
     hasShadow: false,
     alwaysOnTop: true,
-    resizable: false,
+    // Deliberately NOT resizable:false — this is a frameless window so there
+    // are no visible OS resize handles to disable anyway, and macOS's
+    // NSWindowStyleMaskResizable bit (what this maps to) has been known to
+    // interfere with purely-programmatic setBounds calls on some Electron/
+    // macOS combinations. resizeOrb animates the window between mini and
+    // panel sizes entirely via setBounds, so this needs to be unconstrained.
     fullscreenable: false,
     focusable: true,
     skipTaskbar: true,

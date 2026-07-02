@@ -16,11 +16,14 @@ interface VoiceOrbProps {
   size?: number;
 }
 
-// Our 6-state voice machine collapses onto the orb's 4 visual states —
-// "still listening" reads as idle (grey/calm), matching the reference orb's
-// own recommended mapping.
+// Fixed, explicit color scheme: grey=idle, blue=listening, purple=thinking,
+// green=speaking, orange=barge-in. "processing" (retrieving context before
+// the model starts replying) reads as thinking — same purple, since both
+// are "working on it" from the user's perspective.
 function toOrbState(mode: VoiceVisualMode): OrbVisualState {
   switch (mode) {
+    case "listening":
+      return "listening";
     case "thinking":
     case "processing":
       return "thinking";

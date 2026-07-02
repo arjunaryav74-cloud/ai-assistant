@@ -283,11 +283,21 @@ app.whenReady().then(async () => {
       clearOrbHideTimer();
       orbArmedForAutoHide = false;
       if (on && orbWin && !orbWin.isDestroyed() && !orbWin.isVisible()) {
+        // Window wasn't on screen at all — just appear directly at the
+        // final expanded bounds; there's nothing visible to animate from.
+        // This used to *also* fall through into setOrbExpanded's animated
+        // resize below, which computed its animation assuming the window
+        // was still mini-sized when it had just been jumped straight to
+        // panel size here — a real double-resize conflict that produced
+        // exactly the "freaking out" jank being reported.
+        orbExpanded = true;
         positionOrb(true);
         orbWin.show();
+        orbWin.webContents.send(IpcChannel.OrbExpandedChanged, true);
+        return;
       }
     }
-    setOrbExpanded(on);
+    void setOrbExpanded(on);
     if (!manual && !on && orbArmedForAutoHide) {
       orbWin?.hide();
       orbArmedForAutoHide = false;

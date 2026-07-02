@@ -93,6 +93,13 @@ Cron runs every 5 min; generates daily brief + nudges using `preRetrieveContext`
 ## Database
 
 All migrations are in `supabase/migrations/` (numbered, sequential). Apply in order. RLS is enforced on every table — auth session cookie must be present or service role key used for scripts.
+`npm run db:migrate` (`scripts/apply-migrations.mjs`) discovers migration files by reading the
+`supabase/migrations/` directory directly — it used to be a hand-maintained array that silently
+stopped being updated at migration 010, so 011–017 (including the `user_preferences.voice`
+column nova-mac's Settings depends on) had never actually been applied by this script for
+anyone, with no error at migration time — just a confusing "column does not exist" much later
+when something tried to read it. If a column/table genuinely referenced in a migration file
+seems to be missing at runtime, run `npm run db:migrate` before assuming it's an application bug.
 
 Core tables: `conversations`, `messages` (with `metadata` JSONB for receipts/trust tags), `memories`, `memory_links`, `reminders`, `workouts`, `google_oauth_tokens`, `user_preferences`, `proactive_notifications`, `push_subscriptions`.
 
