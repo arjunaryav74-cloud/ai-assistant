@@ -5,33 +5,24 @@ import { useVoice } from "./hooks/useVoice";
 import { Orb } from "./components/orb/Orb";
 import { MiniOrb } from "./components/orb/MiniOrb";
 
-/** True when the orb has something worth reading in the panel. */
-function hasContent(state: ReturnType<typeof useVoice>["state"]): boolean {
-  return (
-    state.name === "processing" ||
-    state.name === "working" ||
-    state.name === "responding" ||
-    state.notice !== null ||
-    state.error !== null
-  );
-}
-
 function VoiceApp() {
   const { state, level, sendText } = useVoice();
   const [expanded, setExpanded] = useState(false);
-  // True when WE grew the window for a voice reply / notice — those collapse
-  // back to the mini orb on their own. Click-opened panels stay open.
+  // True when WE grew the window for a timer notice — that collapses back to
+  // the mini orb on its own. Click-opened panels stay open. Speaking, thinking,
+  // and barge-in never auto-expand — the orb's own color communicates state
+  // (grey/purple/green/orange) while it stays a corner orb.
   const autoExpandedRef = useRef(false);
   const collapseTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => nova().onOrbExpandedChanged(setExpanded), []);
 
-  const content = hasContent(state);
+  const hasNotice = state.notice !== null;
   const expandedRef = useRef(expanded);
   expandedRef.current = expanded;
 
   useEffect(() => {
-    if (content) {
+    if (hasNotice) {
       if (collapseTimer.current) {
         clearTimeout(collapseTimer.current);
         collapseTimer.current = null;
@@ -48,7 +39,7 @@ function VoiceApp() {
         nova().orbSetExpanded(false);
       }, 2500);
     }
-  }, [content]);
+  }, [hasNotice]);
 
   if (!expanded) {
     return (
