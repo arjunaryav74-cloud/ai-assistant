@@ -4,7 +4,8 @@ import type { OrbState } from "../../orb/orb-machine";
 import type { OrbStateName } from "@shared/types";
 import { VoiceOrb, type VoiceVisualMode } from "./VoiceOrb";
 import { TextComposer } from "../composer/TextComposer";
-import { appleSpring } from "../../motion/springs";
+import { appleSpring, jellySpring } from "../../motion/springs";
+import { useOrbDragWiggle } from "../../hooks/useOrbDragWiggle";
 
 function toVisualMode(name: OrbStateName): VoiceVisualMode {
   switch (name) {
@@ -44,6 +45,7 @@ export function Orb({ state, level, onExpand, onCollapse, onSend }: OrbProps) {
   const active = state.name !== "dormant";
   const scrollRef = useRef<HTMLDivElement>(null);
   const notice = noticeText(state);
+  const wiggle = useOrbDragWiggle();
 
   // Keep the newest streamed text in view.
   useEffect(() => {
@@ -154,7 +156,12 @@ export function Orb({ state, level, onExpand, onCollapse, onSend }: OrbProps) {
           animate={{ scale: active ? 1 : 0.92 }}
           transition={appleSpring}
         >
-          <VoiceOrb visualMode={visualMode} audioLevel={level} size={118} />
+          <motion.div
+            animate={{ scaleX: wiggle.scaleX, scaleY: wiggle.scaleY, rotate: wiggle.rotate }}
+            transition={jellySpring}
+          >
+            <VoiceOrb visualMode={visualMode} audioLevel={level} size={118} />
+          </motion.div>
         </motion.div>
 
         <AnimatePresence>

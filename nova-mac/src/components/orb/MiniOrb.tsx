@@ -3,7 +3,8 @@ import { motion } from "framer-motion";
 import type { OrbState } from "../../orb/orb-machine";
 import type { OrbStateName } from "@shared/types";
 import { VoiceOrb, type VoiceVisualMode } from "./VoiceOrb";
-import { appleSpring } from "../../motion/springs";
+import { appleSpring, jellySpring } from "../../motion/springs";
+import { useOrbDragWiggle } from "../../hooks/useOrbDragWiggle";
 
 function toVisualMode(name: OrbStateName): VoiceVisualMode {
   switch (name) {
@@ -34,6 +35,7 @@ const CLICK_MOVE_THRESHOLD = 4;
  */
 export function MiniOrb({ state, level, onClick }: MiniOrbProps) {
   const dragStart = useRef<{ x: number; y: number } | null>(null);
+  const wiggle = useOrbDragWiggle();
 
   function handleMouseDown(e: React.MouseEvent) {
     dragStart.current = { x: e.clientX, y: e.clientY };
@@ -70,7 +72,12 @@ export function MiniOrb({ state, level, onClick }: MiniOrbProps) {
         WebkitAppRegion: "drag",
       } as React.CSSProperties}
     >
-      <VoiceOrb visualMode={toVisualMode(state.name)} audioLevel={level} size={76} />
+      <motion.div
+        animate={{ scaleX: wiggle.scaleX, scaleY: wiggle.scaleY, rotate: wiggle.rotate }}
+        transition={jellySpring}
+      >
+        <VoiceOrb visualMode={toVisualMode(state.name)} audioLevel={level} size={76} />
+      </motion.div>
     </motion.div>
   );
 }

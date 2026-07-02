@@ -290,12 +290,35 @@ app.whenReady().then(async () => {
   }
 
   // Real user drags (not our own programmatic repositioning) — persist where
-  // they left it and stop auto-centering it back to the corner.
+  // they left it and stop auto-centering it back to the corner. `moved`
+  // (macOS-only) fires once when a drag finishes.
   orbWin.on("moved", () => {
     if (orbMoveIsProgrammatic || !orbWin || orbWin.isDestroyed()) return;
     orbUserPositioned = true;
     const { x, y } = orbWin.getBounds();
     saveOrbPosition({ x, y });
+  });
+
+  // `move` (cross-platform) fires continuously *while* dragging — used only
+  // to compute live velocity so the renderer can wiggle the orb like jelly
+  // as it's dragged. Reset the tracking point whenever the window is hidden
+  // or resized/repositioned by us, so a stale gap doesn't get read as motion.
+  let lastMove: { x: number; y: number; t: number } | null = null;
+  orbWin.on("move", () => {
+    if (orbMoveIsProgrammatic || !orbWin || orbWin.isDestroyed()) return;
+    const now = Date.now();
+    const { x, y } = orbWin.getBounds();
+    if (lastMove) {
+      const dt = Math.max(1, now - lastMove.t);
+      orbWin.webContents.send(IpcChannel.OrbDragVelocity, {
+        vx: (x - lastMove.x) / dt,
+        vy: (y - lastMove.y) / dt,
+      });
+    }
+    lastMove = { x, y, t: now };
+  });
+  orbWin.on("hide", () => {
+    lastMove = null;
   });
 
   // If a monitor gets connected/disconnected/reconfigured, only reposition

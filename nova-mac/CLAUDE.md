@@ -87,7 +87,19 @@ drag is detected, `orbUserPositioned` flips on and the spot is persisted via
 `positionOrb()` becomes a no-op as long as `isPointOnAnyDisplay` says that spot is still on
 some connected display. `watchDisplayChanges` (called once on `orbWin` in `main.ts`) falls back
 to the default top-right corner and clears `orbUserPositioned` if a monitor change leaves the
-saved spot off-screen. Voice turns (listening/thinking/speaking/barge-in) **never**
+saved spot off-screen.
+
+**Jelly wiggle while dragging**: separately from `moved`, `main.ts` also listens to the
+cross-platform `move` event (fires continuously *during* a drag, unlike `moved`) to compute
+live velocity and broadcast it as `IpcChannel.OrbDragVelocity`. `useOrbDragWiggle`
+(`src/hooks/useOrbDragWiggle.ts`) turns that into a squash-and-stretch transform — pure math in
+`velocityToWiggle()` (tested in isolation, no React/DOM needed) stretches the orb along the
+direction of motion and squashes it perpendicular, capped so it can't grow enough to clip its
+window; the hook self-decays back to neutral if no new velocity tick arrives within 140ms. Both
+`MiniOrb.tsx` and the expanded panel's orb (`Orb.tsx`) wrap `VoiceOrb` in a `motion.div` driven
+by this hook with `jellySpring` (`src/motion/springs.ts`) for the bouncy settle.
+
+Voice turns (listening/thinking/speaking/barge-in) **never**
 auto-expand the panel — the orb's own color is the only feedback while it stays a corner orb;
 only a timer notice auto-expands (`hasNotice` effect in `src/App.tsx`), collapsing itself again
 ~2.5s after the notice clears. The reducer's `settle` event ends a turn while keeping the
