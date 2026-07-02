@@ -49,7 +49,7 @@ The app has two distinct windows that share a single renderer bundle:
 
 | Window | Size | Style | Purpose |
 |--------|------|-------|---------|
-| Orb (`orbWin`) | 380×520 | frameless, always-on-top (screen-saver level), vibrancy | Siri-style top-right popup: voice orb + status + text composer |
+| Orb (`orbWin`) | 110×110 mini ↔ 380×520 panel | frameless, transparent, always-on-top (screen-saver level) | Persistent Siri-style corner orb; expands into the chat panel |
 | App (`appWin`) | 920×680 | framed, hiddenInset title bar, vibrancy | Settings / Reminders / Memory / Connections tabs |
 
 `src/main.tsx` calls `nova().getWindowMode()` at mount → renders `<App />` (orb) or
@@ -60,11 +60,17 @@ orb window's id: orb → `"orb"`, anything else → `"app"`.
 - **Back to orb**: AppDock home icon → `nova().appClose()` → hides app, shows orb.
 - **Tray**: "Open Nova" menu item creates/shows app window independently.
 
-**Siri-style popup lifecycle** (`main.ts`): on wake-word fire, `summonOrb(true)` positions the
-orb at the top-right of the display the cursor is on (`positionOrbTopRight` in `window.ts`) and
-`showInactive()`s it (no focus steal). `VoiceTurnEnded` → `scheduleOrbHide()` auto-hides ~1.4s
-later — but only when the orb was summoned by voice; a manual `Cmd+Shift+Space` / tray show
-stays until dismissed. Timer fires also summon the orb (8s auto-hide).
+**Siri-style orb lifecycle**: a tiny orb (`MiniOrb.tsx`, 110×110 transparent window) floats
+permanently at the top-right of the display. Main owns the expanded state
+(`setOrbExpanded` in `main.ts`): every change resizes the window top-right-anchored
+(`resizeOrb` in `window.ts`) and broadcasts `IpcChannel.OrbExpandedChanged`; the renderer
+requests changes via `IpcChannel.OrbSetExpanded`. Expansion triggers: orb click (stays open),
+`Cmd+Shift+Space` (toggles mini ↔ panel), and auto-expand from the renderer when a turn has
+content to read (processing/working/responding/notice/error) — auto-expansions collapse back
+to the mini orb ~2.5s after the content settles (`VoiceApp` effect in `src/App.tsx`).
+The reducer's `settle` event ends a turn while keeping the conversation text visible; typed
+messages go through `useVoice().sendText` (no TTS, no barge-in) so replies stream into the
+panel.
 
 ## The IPC contract (single source of truth)
 

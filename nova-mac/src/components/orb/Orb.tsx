@@ -49,9 +49,11 @@ interface OrbProps {
   onSummon?: () => void;
   onStop?: () => void;
   onExpand?: () => void;
+  onCollapse?: () => void;
+  onSend?: (text: string) => void;
 }
 
-export function Orb({ state, level, onExpand }: OrbProps) {
+export function Orb({ state, level, onExpand, onCollapse, onSend }: OrbProps) {
   const visualMode = toVisualMode(state.name);
   const active = state.name !== "dormant";
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -97,23 +99,42 @@ export function Orb({ state, level, onExpand }: OrbProps) {
         >
           Nova
         </div>
-        <button
-          onClick={onExpand}
-          title="Open Nova"
-          style={{
-            WebkitAppRegion: "no-drag",
-            background: "rgba(255,255,255,0.07)",
-            border: "1px solid rgba(255,255,255,0.1)",
-            borderRadius: 8,
-            color: "rgba(255,255,255,0.55)",
-            cursor: "pointer",
-            fontSize: 13,
-            padding: "3px 8px",
-            lineHeight: 1,
-          } as React.CSSProperties}
-        >
-          ⚙
-        </button>
+        <div style={{ display: "flex", gap: 6 }}>
+          <button
+            onClick={onExpand}
+            title="Open Nova settings"
+            style={{
+              WebkitAppRegion: "no-drag",
+              background: "rgba(255,255,255,0.07)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 8,
+              color: "rgba(255,255,255,0.55)",
+              cursor: "pointer",
+              fontSize: 13,
+              padding: "3px 8px",
+              lineHeight: 1,
+            } as React.CSSProperties}
+          >
+            ⚙
+          </button>
+          <button
+            onClick={onCollapse}
+            title="Collapse to orb"
+            style={{
+              WebkitAppRegion: "no-drag",
+              background: "rgba(255,255,255,0.07)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 8,
+              color: "rgba(255,255,255,0.55)",
+              cursor: "pointer",
+              fontSize: 13,
+              padding: "3px 8px",
+              lineHeight: 1,
+            } as React.CSSProperties}
+          >
+            ▴
+          </button>
+        </div>
       </div>
 
       {/* Orb + status */}
@@ -212,7 +233,7 @@ export function Orb({ state, level, onExpand }: OrbProps) {
         )}
       </div>
 
-      <TextComposer />
+      <TextComposer onSend={onSend} />
     </motion.div>
   );
 }

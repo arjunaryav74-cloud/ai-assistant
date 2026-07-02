@@ -28,6 +28,8 @@ export interface NovaBridge {
   getVoicePreferences(): Promise<import("@shared/types").VoicePreferences>;
   voiceTurnEnded(): void;
   getWindowMode(): Promise<string>;
+  orbSetExpanded(on: boolean): void;
+  onOrbExpandedChanged(cb: (on: boolean) => void): () => void;
   appOpen(): void;
   appClose(): void;
   onPrefsChanged(cb: (p: unknown) => void): () => void;

@@ -7,7 +7,7 @@ loadEnv({ path: [".env.local", ".env"] });
 
 import { app, BrowserWindow, globalShortcut, ipcMain, Notification } from "electron";
 import { join } from "node:path";
-import { createOrbWindow, createAppWindow, positionOrbTopRight } from "./window";
+import { createOrbWindow, createAppWindow, positionOrbTopRight, resizeOrb } from "./window";
 import { initTimerManager } from "./timers";
 import { createTray } from "./tray";
 import { registerIpcHandlers, registerChatBridge, registerWakeBridge, registerWindowHandlers } from "./ipc";
@@ -21,36 +21,28 @@ let appWin: BrowserWindow | null = null;
 // Hold a reference so the tray is not garbage-collected.
 let _trayRef: ReturnType<typeof createTray> | null = null;
 
-// Siri-style popup lifecycle: the orb slides in at the top-right on wake and
-// auto-hides shortly after the turn ends — but only if it was summoned by voice
-// (a manual hotkey/tray show stays until the user dismisses it).
-let orbShownByVoice = false;
-let orbHideTimer: ReturnType<typeof setTimeout> | null = null;
+// Siri-style orb lifecycle: a tiny orb floats permanently at the top-right of
+// the screen. It expands into the chat panel when clicked, when a reply is
+// showing (renderer requests it), on hotkey, or when a timer fires — and
+// collapses back to just the orb afterwards. Main owns the expanded state:
+// every change resizes the window (top-right anchored) and is broadcast to the
+// renderer via OrbExpandedChanged.
+let orbExpanded = false;
 
-function summonOrb(byVoice: boolean): void {
+function setOrbExpanded(on: boolean): void {
   if (!orbWin || orbWin.isDestroyed()) return;
-  if (orbHideTimer) {
-    clearTimeout(orbHideTimer);
-    orbHideTimer = null;
-  }
+  orbExpanded = on;
+  resizeOrb(orbWin, on);
+  orbWin.webContents.send(IpcChannel.OrbExpandedChanged, on);
+}
+
+function ensureOrbVisible(): void {
+  if (!orbWin || orbWin.isDestroyed()) return;
   if (!orbWin.isVisible()) {
-    positionOrbTopRight(orbWin);
-    orbShownByVoice = byVoice;
+    positionOrbTopRight(orbWin, orbExpanded);
     // showInactive: don't steal focus from whatever the user is doing.
     orbWin.showInactive();
   }
-}
-
-function scheduleOrbHide(delayMs = 1400): void {
-  if (!orbShownByVoice) return;
-  if (orbHideTimer) clearTimeout(orbHideTimer);
-  orbHideTimer = setTimeout(() => {
-    orbHideTimer = null;
-    if (orbShownByVoice && orbWin && !orbWin.isDestroyed()) {
-      orbWin.hide();
-      orbShownByVoice = false;
-    }
-  }, delayMs);
 }
 
 app.dock?.hide(); // no Dock icon — tray-only
@@ -89,7 +81,10 @@ app.whenReady().then(async () => {
     () => appWin,
     () => {
       appWin = createAppWindow();
-      appWin.on("closed", () => { appWin = null; });
+      appWin.on("closed", () => {
+        appWin = null;
+        ensureOrbVisible(); // bring the corner orb back when the app window closes
+      });
       return appWin;
     },
   );
@@ -157,30 +152,34 @@ app.whenReady().then(async () => {
   const wake = new WakeWordController(modelsDir);
   wake.start(() => {
     wake.pauseForTurn(); // stop ingesting frames during the voice turn
-    summonOrb(true); // Siri-style: pop in at the top-right corner
+    ensureOrbVisible(); // orb animates in place; renderer expands when the reply lands
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send(IpcChannel.WakeDetected);
   });
   registerWakeBridge({
     pushFrame: (buf) => wake.pushFrame(buf),
     setEnabled: (on) => wake.setEnabled(on),
   });
-  // Resume wake detection once the voice turn completes; tuck the popup away.
+  // Resume wake detection once the voice turn completes.
   ipcMain.on(IpcChannel.VoiceTurnEnded, () => {
     wake.resume();
-    scheduleOrbHide();
   });
 
+  // Renderer requests to grow/shrink the orb (orb click, auto-expand on reply,
+  // collapse chevron).
+  ipcMain.on(IpcChannel.OrbSetExpanded, (_e, on: boolean) => setOrbExpanded(on));
+
   // Session timers (set via the set_timer tool). On fire: notification + orb popup;
-  // the orb renderer plays the chime and shows/speaks the label.
+  // the orb renderer plays the chime and shows the label (and collapses after).
   initTimerManager((timer) => {
     if (Notification.isSupported()) {
       new Notification({ title: "Timer done", body: timer.label }).show();
     }
-    summonOrb(true);
+    ensureOrbVisible();
+    // The renderer expands the panel itself when the notice lands (and
+    // collapses it again after the notice dismisses).
     for (const w of BrowserWindow.getAllWindows()) {
       w.webContents.send(IpcChannel.TimerFired, { id: timer.id, label: timer.label });
     }
-    scheduleOrbHide(8000);
   });
 
   try {
@@ -197,22 +196,27 @@ app.whenReady().then(async () => {
     if (!app || app.isDestroyed()) {
       app = createAppWindow();
       appWin = app;
+      app.on("closed", () => {
+        appWin = null;
+        ensureOrbVisible();
+      });
     }
     orbWin?.hide();
     app.show();
     app.focus();
   });
   void _trayRef; // Keep reference to prevent garbage collection
+  // Hotkey toggles the chat panel: mini orb ↔ expanded chat.
   globalShortcut.register("CommandOrControl+Shift+Space", () => {
     if (!orbWin) return;
-    if (orbWin.isVisible()) {
-      orbWin.hide();
-      orbShownByVoice = false;
-    } else {
-      positionOrbTopRight(orbWin);
-      orbShownByVoice = false; // manual show: stays until dismissed
+    if (!orbWin.isVisible()) {
+      positionOrbTopRight(orbWin, true);
       orbWin.show();
+      setOrbExpanded(true);
+      return;
     }
+    setOrbExpanded(!orbExpanded);
+    if (orbExpanded) orbWin.focus();
   });
   orbWin.once("ready-to-show", () => console.log("[nova] orb window ready"));
 });

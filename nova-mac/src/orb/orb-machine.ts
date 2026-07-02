@@ -16,6 +16,7 @@ export type OrbEvent =
   | { type: "responseStart" }
   | { type: "responseDelta"; delta: string }
   | { type: "responseEnd" }
+  | { type: "settle" }
   | { type: "bargeIn" }
   | { type: "startWorking"; step: string }
   | { type: "workingStep"; step: string }
@@ -67,6 +68,13 @@ export function orbReducer(state: OrbState, event: OrbEvent): OrbState {
     case "responseEnd":
       return state.name === "responding" || state.name === "working"
         ? { ...INITIAL_ORB_STATE, name: "dormant" }
+        : state;
+
+    // Turn finished but keep the conversation text on screen (chat panel).
+    // The next summon/submit clears it.
+    case "settle":
+      return state.name === "responding" || state.name === "working"
+        ? { ...state, name: "dormant", workingStep: null }
         : state;
 
     case "bargeIn":

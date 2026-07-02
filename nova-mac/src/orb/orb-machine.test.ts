@@ -93,6 +93,16 @@ describe("orbReducer", () => {
     expect(orbReducer(at("working"), { type: "bargeIn" }).name).toBe("bargeIn");
   });
 
+  it("settle: responding → dormant but keeps the conversation text", () => {
+    const busy: OrbState = { ...at("responding"), transcript: "hi", responseText: "hello!" };
+    const next = orbReducer(busy, { type: "settle" });
+    expect(next.name).toBe("dormant");
+    expect(next.transcript).toBe("hi");
+    expect(next.responseText).toBe("hello!");
+    // next summon clears the settled text
+    expect(orbReducer(next, { type: "summon" }).responseText).toBe("");
+  });
+
   it("notice shows only while dormant and dismiss clears it", () => {
     const next = orbReducer(at("dormant"), { type: "notice", message: "Timer done — Pasta" });
     expect(next.notice).toBe("Timer done — Pasta");
