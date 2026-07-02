@@ -154,7 +154,7 @@ export function Orb({ state, level, onExpand, onCollapse, onSend }: OrbProps) {
           animate={{ scale: active ? 1 : 0.92 }}
           transition={appleSpring}
         >
-          <VoiceOrb visualMode={visualMode} audioLevel={level} size={148} />
+          <VoiceOrb visualMode={visualMode} audioLevel={level} size={118} />
         </motion.div>
 
         <AnimatePresence>
@@ -201,11 +201,13 @@ export function Orb({ state, level, onExpand, onCollapse, onSend }: OrbProps) {
                 maxWidth: "88%",
                 fontSize: 12.5,
                 lineHeight: 1.45,
-                color: "rgba(255,255,255,0.65)",
-                background: "rgba(255,255,255,0.07)",
-                border: "1px solid rgba(255,255,255,0.08)",
-                borderRadius: "14px 14px 4px 14px",
-                padding: "7px 11px",
+                color: "rgba(255,255,255,0.7)",
+                background: "rgba(255,255,255,0.09)",
+                backdropFilter: "blur(20px) saturate(180%)",
+                WebkitBackdropFilter: "blur(20px) saturate(180%)",
+                border: "1px solid rgba(255,255,255,0.12)",
+                borderRadius: 18,
+                padding: "9px 14px",
               }}
             >
               {state.transcript}
@@ -220,6 +222,12 @@ export function Orb({ state, level, onExpand, onCollapse, onSend }: OrbProps) {
               fontSize: 13.5,
               lineHeight: 1.55,
               color: "rgba(255,255,255,0.92)",
+              background: "rgba(255,255,255,0.06)",
+              backdropFilter: "blur(20px) saturate(180%)",
+              WebkitBackdropFilter: "blur(20px) saturate(180%)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 18,
+              padding: "10px 14px",
             }}
           >
             {state.responseText}
