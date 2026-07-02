@@ -21,13 +21,17 @@ import { createTray } from "./tray";
 import { registerIpcHandlers, registerChatBridge, registerWakeBridge, registerWindowHandlers } from "./ipc";
 import { streamChat, cancelChat } from "./chat";
 import { startSignIn, signOut, getAuthState, handleAuthCallback, restoreSession } from "./auth";
-import { WakeWordController } from "./wakeword/index";
+import { WakeWordController, wakeSensitivityToThreshold } from "./wakeword/index";
 import { IpcChannel } from "@shared/types";
 
 let orbWin: BrowserWindow | null = null;
 let appWin: BrowserWindow | null = null;
 // Hold a reference so the tray is not garbage-collected.
 let _trayRef: ReturnType<typeof createTray> | null = null;
+// Assigned once constructed further down; declared here so the PrefsSet
+// handler (registered earlier in the same startup sequence) can push live
+// sensitivity updates into it.
+let wake: WakeWordController | null = null;
 
 // Siri-style orb lifecycle: the orb window is hidden by default and only
 // appears when something *activates* it — a wake word, a timer, or the user
@@ -171,6 +175,9 @@ app.whenReady().then(async () => {
     for (const w of BrowserWindow.getAllWindows()) {
       w.webContents.send(IpcChannel.PrefsChanged, updated.voice);
     }
+    // Wake sensitivity lives in the main process (the wake engine runs
+    // here, not in the renderer) — apply it live instead of only on next launch.
+    wake?.setThreshold(wakeSensitivityToThreshold(updated.voice.wakeWordSensitivity));
     return updated;
   });
 
@@ -214,25 +221,33 @@ app.whenReady().then(async () => {
     import("./memory/manage").then((m) => m.deleteMemoryIpc(id)),
   );
 
-  // Wake-word controller: resolve models dir for dev vs packaged builds
+  // Wake-word controller: resolve models dir for dev vs packaged builds, and
+  // seed the fire threshold from the user's saved sensitivity instead of the
+  // engine's hardcoded default — otherwise the Settings slider would only
+  // ever take effect after the next PrefsSet call, never on launch.
   const modelsDir = app.isPackaged
     ? join(process.resourcesPath, "wakeword-models")
     : join(app.getAppPath(), "electron", "wakeword", "models");
-  const wake = new WakeWordController(modelsDir);
-  wake.start(() => {
-    wake.pauseForTurn(); // stop ingesting frames during the voice turn
+  const initialVoicePrefs = await import("./voice/preferences").then((m) => m.getVoicePreferences());
+  const wakeController = new WakeWordController(
+    modelsDir,
+    wakeSensitivityToThreshold(initialVoicePrefs.wakeWordSensitivity),
+  );
+  wake = wakeController;
+  wakeController.start(() => {
+    wakeController.pauseForTurn(); // stop ingesting frames during the voice turn
     activateOrb(); // pop the mini orb in; auto-hides once the turn settles
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send(IpcChannel.WakeDetected);
   });
   registerWakeBridge({
-    pushFrame: (buf) => wake.pushFrame(buf),
-    setEnabled: (on) => wake.setEnabled(on),
+    pushFrame: (buf) => wakeController.pushFrame(buf),
+    setEnabled: (on) => wakeController.setEnabled(on),
   });
   // Resume wake detection once the voice turn completes, and — if this
   // appearance was system-triggered and the user never opened the panel —
   // tuck the orb away again after a moment.
   ipcMain.on(IpcChannel.VoiceTurnEnded, () => {
-    wake.resume();
+    wakeController.resume();
     if (orbArmedForAutoHide && !orbExpanded) {
       scheduleOrbAutoHide(1500);
     }

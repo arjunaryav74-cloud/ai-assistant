@@ -71,9 +71,18 @@ with `orbArmedForAutoHide` in `main.ts`:
 - **Manual activation** (orb click, `Cmd+Shift+Space`, tray "Open Nova", closing the Settings
   window) → disarms auto-hide and force-shows the window; collapsing afterward only shrinks it
   back to the mini orb, it does not vanish.
-`IpcChannel.OrbSetExpanded(on, manual?)` carries this distinction from the renderer; when no
-custom position is set, main resizes/positions top-right-anchored via `resizeOrb`/
-`positionOrbTopRight` (`window.ts`) and broadcasts `IpcChannel.OrbExpandedChanged`.
+`IpcChannel.OrbSetExpanded(on, manual?)` carries this distinction from the renderer; main
+resizes via `resizeOrb` and positions fresh appearances via `positionOrbTopRight` (`window.ts`),
+broadcasting `IpcChannel.OrbExpandedChanged`. `resizeOrb` anchors the **orb's visual center**,
+not a window corner — it used to anchor the top-right corner, which made the orb appear to jump
+~140px left / ~50px down on expand, since the orb sits near the top of the tall 520px panel
+rather than centered in the whole window. `orbCenterOffset()` hand-computes where the orb's
+center sits relative to the window's top-left for each state (mini: window center, since
+`MiniOrb.tsx` fills the window and centers its content; panel: `App.tsx`'s 8px wrapper padding +
+a 34px icon strip + half the 118px orb, from `Orb.tsx`'s actual layout) and solves for the
+window position that keeps that point at the same screen pixel across the resize. These are
+hand-tracked constants, not measured — if `Orb.tsx`'s icon-strip height, wrapper padding, or
+panel orb size ever change, `orbCenterOffset()` in `window.ts` needs updating too.
 
 **Dragging the mini orb is fully custom JS, not a native OS drag region**
 (`src/hooks/useDraggableOrb.ts`). `-webkit-app-region: drag` + a click handler on the same
@@ -149,7 +158,12 @@ don't load at startup.
 ## Auth & Supabase
 
 - Magic-link OTP (`auth.signInWithOtp`) with `emailRedirectTo: nova://auth-callback`.
-  `handleAuthCallback` tolerates both hash-token and `?code=` (PKCE) callback shapes.
+  `handleAuthCallback` tolerates both hash-token and `?code=` (PKCE) callback shapes, and calls
+  `ensureAppUser(userId)` (upserts into `public.users`, mirroring the web app's `ensureAppUser`
+  in `lib/auth/session.ts`) — every other table's `user_id` references `public.users(id)`, so a
+  user whose *first ever* sign-in happens through nova-mac (not the web app) would otherwise hit
+  a foreign-key violation on the first write anywhere (reminders, memories, Settings saves —
+  all silently, since Supabase doesn't throw on a failed write unless you check `.error`).
 - Sessions are persisted **encrypted** via Electron `safeStorage` (Keychain) to
   `userData/session.bin` — see `electron/session-store.ts`. Supabase client itself runs with
   `persistSession: false`; we restore manually on boot via `restoreSession()`.
@@ -247,7 +261,14 @@ Auth-gated. 28 px draggable title bar inset. Tab state via `useState<Tab>`. AppD
 
 **Preferences IPC**: `PrefsGet` returns `AllPrefs` (`voice` + `proactive`). After `PrefsSet`,
 main broadcasts `IpcChannel.PrefsChanged` with `updated.voice` to **all** windows so the orb's
-`useVoice` stays in sync without a reload.
+`useVoice` stays in sync without a reload, and pushes the sensitivity into the wake engine (see
+Wake word pipeline below). `electron/voice/save-preferences.ts` and `preferences.ts` **throw**
+on any Supabase error instead of swallowing it (previously every read/write there ignored
+`.error`, so a failed save still showed "Saved ✓" in Settings with no way to tell it hadn't
+actually persisted) — the thrown error propagates through `ipcMain.handle` back to
+`SettingsPage.tsx`'s existing try/catch, which is what makes its "Save failed" state real.
+`getVoicePreferences()` also filters by `user_id` explicitly now instead of relying solely on
+RLS to scope an otherwise-unfiltered query.
 
 **Proactive prefs** map camelCase `ProactivePrefs` ↔ snake_case DB columns: `proactiveMode` →
 `proactive_tier`, `dailyBriefEnabled` → `brief_enabled` (see `save-preferences.ts`).
@@ -298,8 +319,15 @@ produces near-zero scores rather than an error, so the exact contract matters:
   emits **Int16, 16 kHz mono, 1280-sample (~80 ms) frames** (`SAMPLES_PER_FRAME` in
   `shared/wake-constants.ts`) over `IpcChannel.WakeAudioFrame`.
 - `electron/wakeword/index.ts` (`WakeWordController`, main thread): forwards frames to the
-  worker, applies a fire threshold (default `0.05`), debounce, and an arm/re-arm gate; pauses
-  during a voice turn and resumes on `voiceTurnEnded`.
+  worker, applies a fire threshold, debounce, and an arm/re-arm gate; pauses during a voice turn
+  and resumes on `voiceTurnEnded`. The threshold is **not** a fixed default — the wake engine
+  runs in the main process, but the "Wake word sensitivity" slider lives in the renderer's
+  Settings page, so it has to be pushed across: `wakeSensitivityToThreshold()` (pure, tested)
+  maps the slider's sense (higher = fires easier) onto the engine's inverted one (score must
+  *exceed* threshold, so lower = fires easier). `main.ts` seeds the initial threshold from saved
+  prefs at boot (`getVoicePreferences()` before constructing `WakeWordController`) and calls
+  `wake?.setThreshold(...)` again inside the `PrefsSet` handler so a change takes effect
+  immediately, not just after the next launch.
 - `electron/wakeword/worker.ts` + `engine.ts`: three-stage ONNX pipeline
   `melspectrogram.onnx → embedding_model.onnx → hey_jarvis_v0.1.onnx`. **Preprocessing the
   models were trained on (all four are required or scores flatline near 0):**

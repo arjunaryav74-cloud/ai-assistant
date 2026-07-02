@@ -4,6 +4,21 @@ import { fileURLToPath } from "node:url";
 
 const DEBOUNCE_MS = 2000;
 
+/**
+ * Maps the Settings "Wake word sensitivity" slider (0.35 strict … 0.85
+ * sensitive, per its UI copy "higher fires easier") onto the engine's score
+ * threshold, whose sense is inverted (score must EXCEED threshold to fire,
+ * so a lower threshold is what actually fires more easily). 0.05 was the
+ * previous hardcoded default; this keeps that same ballpark at the slider's
+ * midpoint while giving the extremes real range.
+ */
+export function wakeSensitivityToThreshold(sensitivity: number): number {
+  const s = Math.max(0, Math.min(1, sensitivity));
+  // Slider's real range is 0.35 (strict) .. 0.85 (sensitive): threshold
+  // 0.064 .. 0.026. Clamped to 0..1 so out-of-range input can't invert.
+  return 0.09 - s * 0.075;
+}
+
 export class WakeWordController {
   private worker: Worker | null = null;
   private enabled = true;
@@ -12,14 +27,22 @@ export class WakeWordController {
   /** Require score to drop below threshold before re-firing */
   private armed = true;
   private onWake: (() => void) | null = null;
+  private threshold: number;
 
   constructor(
     private readonly modelsDir: string = join(
       dirname(fileURLToPath(import.meta.url)),
       "models",
     ),
-    private readonly threshold = 0.05,
-  ) {}
+    initialThreshold = 0.05,
+  ) {
+    this.threshold = initialThreshold;
+  }
+
+  /** Called live when the user changes wake sensitivity in Settings. */
+  setThreshold(threshold: number): void {
+    this.threshold = threshold;
+  }
 
   start(onWake: () => void): void {
     this.onWake = onWake;

@@ -14,6 +14,28 @@ function orbBounds(expanded: boolean): { width: number; height: number } {
     : { width: ORB_MINI_SIZE, height: ORB_MINI_SIZE };
 }
 
+// Where the orb's visual center sits relative to the window's top-left, per
+// state — must track the actual rendered layout so resizeOrb can keep the
+// *orb* visually anchored across expand/collapse, not just a window corner.
+// MiniOrb (src/components/orb/MiniOrb.tsx) fills the whole mini window and
+// centers its content, so it's simply the window's center. The expanded
+// panel (src/components/orb/Orb.tsx, wrapped by src/App.tsx) stacks, from
+// the window's top: the App.tsx wrapper's 8px padding, then a 34px icon
+// strip (10px top padding + 24px buttons), then the orb itself at 118px —
+// horizontally it's simply centered (the 8px wrapper padding is symmetric).
+const PANEL_WRAPPER_PADDING = 8;
+const PANEL_ICON_STRIP_HEIGHT = 34;
+const PANEL_ORB_SIZE = 118;
+
+function orbCenterOffset(expanded: boolean): { x: number; y: number } {
+  return expanded
+    ? {
+        x: ORB_PANEL_WIDTH / 2,
+        y: PANEL_WRAPPER_PADDING + PANEL_ICON_STRIP_HEIGHT + PANEL_ORB_SIZE / 2,
+      }
+    : { x: ORB_MINI_SIZE / 2, y: ORB_MINI_SIZE / 2 };
+}
+
 /**
  * Position (and size) the orb at the top-right of the display the cursor is on
  * (Siri-style corner popup), just under the menu bar. The top-right corner
@@ -34,12 +56,27 @@ export function positionOrbTopRight(win: BrowserWindow, expanded: boolean): void
   );
 }
 
-/** Resize in place, keeping the top-right corner anchored on the current display. */
+/**
+ * Resize in place, keeping the *orb itself* visually anchored — not a window
+ * corner. Anchoring the top-right corner made the orb appear to jump ~140px
+ * left and ~50px down on expand, because it sits near the top of the tall
+ * panel rather than centered in the whole window; solving for the window
+ * position that keeps `orbCenterOffset` at the same screen pixel before and
+ * after resizing keeps the orb visually still while the panel grows around it.
+ */
 export function resizeOrb(win: BrowserWindow, expanded: boolean): void {
   const current = win.getBounds();
   const size = orbBounds(expanded);
-  const right = current.x + current.width;
-  win.setBounds({ x: right - size.width, y: current.y, ...size }, false);
+  const from = orbCenterOffset(!expanded);
+  const to = orbCenterOffset(expanded);
+  win.setBounds(
+    {
+      x: current.x + from.x - to.x,
+      y: current.y + from.y - to.y,
+      ...size,
+    },
+    false,
+  );
 }
 
 /**
