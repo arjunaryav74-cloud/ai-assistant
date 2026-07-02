@@ -273,11 +273,7 @@ export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
   wakeWordSensitivity: 0.5,
   wakePhrases: ["hey jarvis"],
   sttProvider: "openai",
-  // mini-transcribe trades a small amount of accuracy for meaningfully lower
-  // latency on short spoken-command audio (the vast majority of what this
-  // app transcribes) — worth it since perceived turn speed matters more here
-  // than transcribing long-form dictation precisely.
-  openAiSttModel: "gpt-4o-mini-transcribe",
+  openAiSttModel: "gpt-4o-transcribe",
   googleSttModel: "latest_long",
   googleSttQuality: "medium",
   ttsProvider: "openai",

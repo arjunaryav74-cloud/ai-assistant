@@ -419,18 +419,9 @@ app.whenReady().then(async () => {
     clearOrbHideTimer();
     orbArmedForAutoHide = false;
     if (!orbWin.isVisible()) {
-      // Same fix as the OrbSetExpanded IPC handler above: the window isn't
-      // on screen at all, so jump straight to the final expanded bounds
-      // instead of ALSO running the animated resizeOrb on top of it — that
-      // combination computed its animation assuming the window was still
-      // mini-sized when it had just been placed directly at panel size here,
-      // producing a visible jump to a wrong position (the hotkey's own copy
-      // of the "freaking out"/teleport bug already fixed for clicks).
-      orbExpanded = true;
       positionOrb(true);
       orbWin.show();
-      orbWin.webContents.send(IpcChannel.OrbExpandedChanged, true);
-      orbWin.focus();
+      setOrbExpanded(true);
       return;
     }
     setOrbExpanded(!orbExpanded);
