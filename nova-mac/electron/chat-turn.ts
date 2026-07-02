@@ -22,6 +22,7 @@ import {
   persistAssistantMessage,
   loadLastNMessages,
 } from "./conversation";
+import { getVoicePreferences } from "./voice/preferences";
 
 const LIGHT_MODEL =
   process.env.ANTHROPIC_MODEL_LIGHT?.trim() || "claude-haiku-4-5-20251001";
@@ -139,14 +140,12 @@ export async function streamTurn(
     let plan = resolveRetrievalPlan("main", intent);
     if (isVoice) plan = applyMacVoiceOverrides(plan);
 
-    const complexity = isVoice ? "light" : inferComplexity(transcript);
-    const model = complexity === "heavy" ? HEAVY_MODEL : LIGHT_MODEL;
     const maxIterations = isVoice
       ? MAX_TOOL_ITERATIONS_VOICE
       : MAX_TOOL_ITERATIONS_TEXT;
     const maxTokens = isVoice ? 650 : 768;
 
-    const [history, relevantContext, timezone] = await Promise.all([
+    const [history, relevantContext, timezone, voicePrefs] = await Promise.all([
       loadLastNMessages(conversationId, plan.chatHistoryLimit),
       retrieveWithDeadline(
         userId,
@@ -155,7 +154,19 @@ export async function streamTurn(
         isVoice ? RETRIEVAL_DEADLINE_VOICE_MS : RETRIEVAL_DEADLINE_MS,
       ),
       resolveUserTimezoneCached(userId),
+      getVoicePreferences(),
     ]);
+
+    // "auto" keeps the built-in routing (voice always light for latency,
+    // text routed by inferComplexity); a pinned preference overrides both.
+    const model =
+      voicePrefs.modelPreference === "light"
+        ? LIGHT_MODEL
+        : voicePrefs.modelPreference === "heavy"
+          ? HEAVY_MODEL
+          : (isVoice ? "light" : inferComplexity(transcript)) === "heavy"
+            ? HEAVY_MODEL
+            : LIGHT_MODEL;
 
     const clock = buildClockForZone(timezone);
     const system = buildMacSystemPrompt(isVoice, clock);

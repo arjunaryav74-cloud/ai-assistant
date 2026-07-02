@@ -75,7 +75,11 @@ export function resizeOrb(win: BrowserWindow, expanded: boolean): void {
       y: current.y + from.y - to.y,
       ...size,
     },
-    false,
+    // true = macOS-native animated resize. The correct destination math above
+    // fixes *where* the orb ends up; this fixes *how* it gets there — without
+    // it `setBounds` snaps the whole window instantly with zero transition,
+    // which reads as a teleport no matter how correct the destination is.
+    true,
   );
 }
 

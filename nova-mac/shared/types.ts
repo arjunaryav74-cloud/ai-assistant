@@ -171,8 +171,13 @@ export type OpenAiTtsModel = "gpt-4o-mini-tts" | "tts-1" | "tts-1-hd";
 export type GoogleVoiceQuality = "low" | "medium" | "high";
 export type GoogleSttModel = "latest_long" | "latest_short" | "chirp_2";
 
+/** "auto" keeps the built-in light/heavy routing (voice always light, text
+ *  routed by inferComplexity); "light"/"heavy" pin every turn to that model. */
+export type ModelPreference = "auto" | "light" | "heavy";
+
 export interface VoicePreferences {
   interactionMode: VoiceInteractionMode;
+  modelPreference: ModelPreference;
   autoSendOnEndOfTurn: boolean;
   silenceMs: number;
   spokenReplies: boolean;
@@ -253,6 +258,7 @@ export interface MemoryItem {
 
 export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
   interactionMode: "wake_word",
+  modelPreference: "auto",
   autoSendOnEndOfTurn: true,
   silenceMs: 900,
   spokenReplies: true,

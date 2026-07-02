@@ -253,6 +253,23 @@ export function SettingsPage() {
                     onChange={(v) => saveDebounced({ wakeWordSensitivity: v })}
                   />
                 </Group>
+                <GroupLabel>AI model</GroupLabel>
+                <Group>
+                  <Row
+                    label="Model"
+                    description="Auto picks a fast model for voice and simple chat, a stronger one for complex requests. Pin one to always use it."
+                  >
+                    <Select
+                      value={voice.modelPreference}
+                      onChange={(e) => save({ modelPreference: e.target.value as VoicePreferences["modelPreference"] })}
+                      className="w-36"
+                    >
+                      <option value="auto">Auto</option>
+                      <option value="light">Fast (Haiku)</option>
+                      <option value="heavy">Smart (Sonnet)</option>
+                    </Select>
+                  </Row>
+                </Group>
                 <GroupLabel>Popup</GroupLabel>
                 <Group>
                   <Row

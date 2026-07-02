@@ -59,11 +59,14 @@ let orbMoveIsProgrammatic = false;
 function moveOrbProgrammatically(fn: () => void): void {
   orbMoveIsProgrammatic = true;
   fn();
-  // Electron delivers `moved` asynchronously; give it a beat to land before
-  // resuming user-drag tracking.
+  // resizeOrb's setBounds(..., true) triggers macOS's native animated resize
+  // (~0.2–0.25s), which fires `moved`/`move` repeatedly for its whole
+  // duration — the suppression window has to comfortably outlast that, not
+  // just the instant of the call, or the animation's tail end gets read as a
+  // real user drag.
   setTimeout(() => {
     orbMoveIsProgrammatic = false;
-  }, 150);
+  }, 350);
 }
 
 function clearOrbHideTimer(): void {

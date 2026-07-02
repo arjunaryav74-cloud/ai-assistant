@@ -72,7 +72,13 @@ export async function handleAuthCallback(url: string): Promise<void> {
 export async function restoreSession(): Promise<void> {
   const stored = loadSession();
   if (!stored) return;
-  await getSupabase().auth.setSession(stored);
+  // If this silently fails (e.g. an expired refresh token), every DB call
+  // for the rest of the session runs unauthenticated — RLS then makes every
+  // read/write behave like there's no signed-in user at all, including
+  // every Settings save. Log it loudly since there's nowhere else for a
+  // user to see this.
+  const { error } = await getSupabase().auth.setSession(stored);
+  if (error) console.error("[nova] restoreSession failed — starting signed out:", error.message);
 }
 
 export async function getAuthState(): Promise<AuthState> {

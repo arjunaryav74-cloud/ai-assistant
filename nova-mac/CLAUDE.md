@@ -83,6 +83,12 @@ a 34px icon strip + half the 118px orb, from `Orb.tsx`'s actual layout) and solv
 window position that keeps that point at the same screen pixel across the resize. These are
 hand-tracked constants, not measured — if `Orb.tsx`'s icon-strip height, wrapper padding, or
 panel orb size ever change, `orbCenterOffset()` in `window.ts` needs updating too.
+`resizeOrb`'s `setBounds` call passes `animate: true` (macOS-only third-party-ish Electron
+param) — getting the destination math right alone wasn't enough to stop the "teleport" feeling;
+`setBounds`'s default is an instant snap with zero transition regardless of how correct the
+target position is. `moveOrbProgrammatically`'s suppression window (`main.ts`) is 350ms to
+comfortably outlast that native animation (~0.2–0.25s), since it fires `moved`/`move` events
+throughout, not just once at the end.
 
 **Dragging the mini orb is fully custom JS, not a native OS drag region**
 (`src/hooks/useDraggableOrb.ts`). `-webkit-app-region: drag` + a click handler on the same
@@ -248,6 +254,13 @@ on-fire callback that shows a Notification, summons the orb, and broadcasts
 - Persists user + assistant messages to Supabase after each turn
 - **Never `select("embedding")`** — memory queries always use an explicit column list
 
+**Model selection** (`electron/chat-turn.ts`): `VoicePreferences.modelPreference` (`"auto" |
+"light" | "heavy"`, Settings → General → AI model) overrides the built-in routing when pinned.
+`"auto"` (default) keeps voice turns always on the light model for latency and routes text turns
+through `inferComplexity()`; `"light"`/`"heavy"` force every turn to that model regardless.
+Fetched via `getVoicePreferences()` in the same `Promise.all` as history/context/timezone, so
+there's no extra round-trip latency on top of what was already there.
+
 ## App window — tabs (`src/AppShell.tsx`)
 
 Auth-gated. 28 px draggable title bar inset. Tab state via `useState<Tab>`. AppDock fixed at bottom.
@@ -327,7 +340,17 @@ produces near-zero scores rather than an error, so the exact contract matters:
   *exceed* threshold, so lower = fires easier). `main.ts` seeds the initial threshold from saved
   prefs at boot (`getVoicePreferences()` before constructing `WakeWordController`) and calls
   `wake?.setThreshold(...)` again inside the `PrefsSet` handler so a change takes effect
-  immediately, not just after the next launch.
+  immediately, not just after the next launch. The mapped range is deliberately narrow and
+  floored (real slider domain 0.35..0.85 -> threshold ~0.059..0.037) — this control did nothing
+  until it was wired up, so anyone who'd already dragged it to max thinking it had no effect
+  would otherwise land on a threshold low enough to false-trigger on background noise the moment
+  it started actually working.
+- `src/hooks/useVoice.ts`'s `recordUntilSilence` requires mic level to stay continuously above
+  threshold for `MIN_SUSTAINED_SPEECH_MS` (250ms) before treating it as real speech, not a single
+  noise blip (door, cough, a wake-word false-fire's own tail) — otherwise a one-frame spike
+  immediately produces a short, near-silent recording that STT models are prone to hallucinating
+  plausible-sounding but entirely fabricated text for, which then gets sent to Claude as if the
+  user said it.
 - `electron/wakeword/worker.ts` + `engine.ts`: three-stage ONNX pipeline
   `melspectrogram.onnx → embedding_model.onnx → hey_jarvis_v0.1.onnx`. **Preprocessing the
   models were trained on (all four are required or scores flatline near 0):**

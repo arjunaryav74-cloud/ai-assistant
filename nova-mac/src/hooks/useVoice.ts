@@ -15,6 +15,12 @@ import { DEFAULT_VOICE_PREFERENCES, type VoicePreferences } from "@shared/types"
 /** How long to wait for the user to start speaking before giving up. */
 const NO_SPEECH_TIMEOUT_MS = 6000;
 const MAX_RECORDING_MS = 30_000;
+/** Level must stay continuously above threshold this long before it counts
+ *  as real speech, not a brief noise blip (door, cough, wake-word tail) —
+ *  otherwise a single loud frame immediately after a false wake triggers a
+ *  short, near-silent recording that STT models are prone to hallucinating
+ *  plausible-sounding text for. */
+const MIN_SUSTAINED_SPEECH_MS = 250;
 
 /** Map listening sensitivity (0 strict … 1 sensitive) to a speech level threshold. */
 function speechThreshold(sensitivity: number): number {
@@ -72,16 +78,24 @@ async function recordUntilSilence(
     }, NO_SPEECH_TIMEOUT_MS);
     const maxTimer = setTimeout(finish, MAX_RECORDING_MS);
 
+    let aboveThresholdSince: number | null = null;
+
     analyser.start(stream, (level) => {
       onLevel(level);
       if (level > options.threshold) {
-        speechSeen = true;
+        if (aboveThresholdSince === null) aboveThresholdSince = Date.now();
+        if (!speechSeen && Date.now() - aboveThresholdSince >= MIN_SUSTAINED_SPEECH_MS) {
+          speechSeen = true;
+        }
         if (silenceTimer !== null) {
           clearTimeout(silenceTimer);
           silenceTimer = null;
         }
-      } else if (speechSeen && silenceTimer === null) {
-        silenceTimer = setTimeout(finish, options.silenceMs);
+      } else {
+        aboveThresholdSince = null;
+        if (speechSeen && silenceTimer === null) {
+          silenceTimer = setTimeout(finish, options.silenceMs);
+        }
       }
     });
   });

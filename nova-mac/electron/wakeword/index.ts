@@ -9,14 +9,20 @@ const DEBOUNCE_MS = 2000;
  * sensitive, per its UI copy "higher fires easier") onto the engine's score
  * threshold, whose sense is inverted (score must EXCEED threshold to fire,
  * so a lower threshold is what actually fires more easily). 0.05 was the
- * previous hardcoded default; this keeps that same ballpark at the slider's
- * midpoint while giving the extremes real range.
+ * previous hardcoded default and effectively the only value ever used —
+ * this control did nothing until it was wired up, so anyone who'd already
+ * dragged the slider to max "sensitive" (thinking it had no effect) would
+ * otherwise land on a threshold low enough to false-trigger on background
+ * noise/TV/conversation the moment it started actually working. Range is
+ * deliberately narrow and floored well above zero to keep even max
+ * sensitivity safe.
  */
 export function wakeSensitivityToThreshold(sensitivity: number): number {
   const s = Math.max(0, Math.min(1, sensitivity));
-  // Slider's real range is 0.35 (strict) .. 0.85 (sensitive): threshold
-  // 0.064 .. 0.026. Clamped to 0..1 so out-of-range input can't invert.
-  return 0.09 - s * 0.075;
+  // 0 -> 0.075 (strict) … 1 -> 0.03 (sensitive); real slider domain
+  // 0.35..0.85 maps to ~0.059..0.037 — a safe band either side of the old
+  // hardcoded 0.05 default.
+  return Math.max(0.03, 0.075 - s * 0.045);
 }
 
 export class WakeWordController {
