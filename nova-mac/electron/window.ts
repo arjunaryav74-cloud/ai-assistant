@@ -5,7 +5,8 @@ import { join } from "node:path";
 export const ORB_MINI_SIZE = 110;
 export const ORB_PANEL_WIDTH = 380;
 export const ORB_PANEL_HEIGHT = 520;
-const ORB_MARGIN = 16;
+// Tight to the corner, hugging the menu bar the way Siri's own icon does.
+const ORB_MARGIN = 8;
 
 function orbBounds(expanded: boolean): { width: number; height: number } {
   return expanded
@@ -39,6 +40,30 @@ export function resizeOrb(win: BrowserWindow, expanded: boolean): void {
   const size = orbBounds(expanded);
   const right = current.x + current.width;
   win.setBounds({ x: right - size.width, y: current.y, ...size }, false);
+}
+
+/**
+ * Keep the orb anchored correctly as the display setup changes while it's
+ * visible — an external monitor gets connected/disconnected, resolution or
+ * arrangement changes, etc. (Moving between virtual desktops/Spaces on the
+ * same display needs no handling: `setVisibleOnAllWorkspaces` already keeps
+ * the window present there without repositioning.) Every place that shows the
+ * orb also repositions it to the display under the cursor at that moment, so
+ * this only covers changes that happen while it's already on screen.
+ */
+export function watchDisplayChanges(win: BrowserWindow, isExpanded: () => boolean): () => void {
+  const reposition = () => {
+    if (win.isDestroyed() || !win.isVisible()) return;
+    positionOrbTopRight(win, isExpanded());
+  };
+  screen.on("display-added", reposition);
+  screen.on("display-removed", reposition);
+  screen.on("display-metrics-changed", reposition);
+  return () => {
+    screen.removeListener("display-added", reposition);
+    screen.removeListener("display-removed", reposition);
+    screen.removeListener("display-metrics-changed", reposition);
+  };
 }
 
 export function createOrbWindow(): BrowserWindow {

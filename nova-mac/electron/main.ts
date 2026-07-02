@@ -7,7 +7,7 @@ loadEnv({ path: [".env.local", ".env"] });
 
 import { app, BrowserWindow, globalShortcut, ipcMain, Notification } from "electron";
 import { join } from "node:path";
-import { createOrbWindow, createAppWindow, positionOrbTopRight, resizeOrb } from "./window";
+import { createOrbWindow, createAppWindow, positionOrbTopRight, resizeOrb, watchDisplayChanges } from "./window";
 import { initTimerManager } from "./timers";
 import { createTray } from "./tray";
 import { registerIpcHandlers, registerChatBridge, registerWakeBridge, registerWindowHandlers } from "./ipc";
@@ -244,6 +244,7 @@ app.whenReady().then(async () => {
   }
   await restoreSession();
   orbWin = createOrbWindow();
+  watchDisplayChanges(orbWin, () => orbExpanded);
   _trayRef = createTray(orbWin, () => {
     // "Open Nova" tray item callback — manual action, disarm auto-hide.
     clearOrbHideTimer();

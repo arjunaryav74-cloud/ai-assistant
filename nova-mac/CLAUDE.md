@@ -73,7 +73,11 @@ with `orbArmedForAutoHide` in `main.ts`:
   back to the mini orb, it does not vanish.
 `IpcChannel.OrbSetExpanded(on, manual?)` carries this distinction from the renderer; main
 resizes top-right-anchored via `resizeOrb`/`positionOrbTopRight` (`window.ts`) and broadcasts
-`IpcChannel.OrbExpandedChanged`. Voice turns (listening/thinking/speaking/barge-in) **never**
+`IpcChannel.OrbExpandedChanged`. `positionOrbTopRight` always targets
+`screen.getDisplayNearestPoint(screen.getCursorScreenPoint())`, so every activation places the
+orb on whichever display the user is actually on; `watchDisplayChanges` (called once on
+`orbWin` in `main.ts`) additionally repositions it live if a monitor is connected/disconnected
+or reconfigured while it's already visible. Voice turns (listening/thinking/speaking/barge-in) **never**
 auto-expand the panel — the orb's own color is the only feedback while it stays a corner orb;
 only a timer notice auto-expands (`hasNotice` effect in `src/App.tsx`), collapsing itself again
 ~2.5s after the notice clears. The reducer's `settle` event ends a turn while keeping the
