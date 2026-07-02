@@ -76,9 +76,10 @@ export function createOrbWindow(): BrowserWindow {
     callback(permission === "media" || permission === "mediaKeySystem");
   });
 
+  // Stays hidden until a wake word, timer, or hotkey activates it — never
+  // shown just because the window finished loading (same in dev and prod).
   if (process.env.ELECTRON_RENDERER_URL) {
     win.loadURL(process.env.ELECTRON_RENDERER_URL);
-    win.once("ready-to-show", () => win.showInactive());
   } else {
     win.loadFile(join(import.meta.dirname, "../renderer/index.html"));
   }

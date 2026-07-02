@@ -29,10 +29,11 @@ function VoiceApp() {
       }
       if (!expandedRef.current) {
         autoExpandedRef.current = true;
-        nova().orbSetExpanded(true);
+        nova().orbSetExpanded(true); // system-driven: main auto-hides after
       }
     } else if (autoExpandedRef.current) {
-      // Give the user a moment to read, then tuck back into the corner.
+      // Give the user a moment to read, then tuck back into the corner
+      // (main hides the whole window once this collapse lands).
       collapseTimer.current = setTimeout(() => {
         collapseTimer.current = null;
         autoExpandedRef.current = false;
@@ -48,7 +49,7 @@ function VoiceApp() {
         level={level}
         onClick={() => {
           autoExpandedRef.current = false;
-          nova().orbSetExpanded(true);
+          nova().orbSetExpanded(true, true); // manual: stays open until closed
         }}
       />
     );
@@ -62,7 +63,7 @@ function VoiceApp() {
         onSend={sendText}
         onCollapse={() => {
           autoExpandedRef.current = false;
-          nova().orbSetExpanded(false);
+          nova().orbSetExpanded(false, true); // manual: shrinks, doesn't vanish
         }}
         onExpand={() => nova().appOpen()}
       />
@@ -81,9 +82,10 @@ export function App() {
     return unsub;
   }, []);
 
-  // The sign-in card needs the full panel, not the mini orb.
+  // The sign-in card needs the full panel visible — force it manually since
+  // the orb window is otherwise hidden until something activates it.
   useEffect(() => {
-    if (!auth.signedIn) nova().orbSetExpanded(true);
+    if (!auth.signedIn) nova().orbSetExpanded(true, true);
   }, [auth.signedIn]);
 
   if (!auth.signedIn) {

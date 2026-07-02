@@ -7,6 +7,8 @@ import { TtsBargeInListener, ttsBargeInConfigFromSensitivity } from "../voice/tt
 import { VoicePlayer } from "../voice/player";
 import { startWakeCapture } from "../voice/wake-capture";
 import { playCue } from "../voice/earcon";
+import { sanitizeTranscript } from "../voice/transcript-filter";
+import { isVoiceStopPhrase } from "../voice/stop-phrases";
 import { nova } from "../lib/ipc";
 import { DEFAULT_VOICE_PREFERENCES, type VoicePreferences } from "@shared/types";
 
@@ -276,6 +278,24 @@ export function useVoice(): {
         return;
       }
 
+      // Filter STT hallucinations from background noise/silence ("thanks for
+      // watching", stray "you", etc.) and handle kill phrases ("stop", "that's
+      // all", "thank you very much", ...) before ever calling Claude.
+      const sanitized = sanitizeTranscript(transcript);
+      if (!sanitized) {
+        // Noise, not real speech — drop silently, no sound, no chat call.
+        dispatch({ type: "dismiss" });
+        endTurn();
+        return;
+      }
+      if (isVoiceStopPhrase(sanitized)) {
+        cue("gotIt");
+        dispatch({ type: "dismiss" });
+        endTurn();
+        return;
+      }
+      transcript = sanitized;
+
       dispatch({ type: "submit", transcript });
       dispatch({ type: "responseStart" });
       const id = `turn-${++reqId.current}`;
@@ -308,8 +328,13 @@ export function useVoice(): {
         });
       }
 
+      let firstDelta = true;
       const offDelta = nova().onChatDelta((p) => {
         if (p.requestId !== id) return;
+        if (firstDelta) {
+          firstDelta = false;
+          cue("reply"); // soft blip as the reply actually starts (thinking → speaking)
+        }
         dispatch({ type: "responseDelta", delta: p.delta });
         speaker?.feed(p.delta);
       });

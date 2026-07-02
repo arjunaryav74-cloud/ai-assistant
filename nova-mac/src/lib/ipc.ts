@@ -28,7 +28,8 @@ export interface NovaBridge {
   getVoicePreferences(): Promise<import("@shared/types").VoicePreferences>;
   voiceTurnEnded(): void;
   getWindowMode(): Promise<string>;
-  orbSetExpanded(on: boolean): void;
+  /** manual=true for a real user action (click/hotkey) vs a system-driven change (timer notice). */
+  orbSetExpanded(on: boolean, manual?: boolean): void;
   onOrbExpandedChanged(cb: (on: boolean) => void): () => void;
   appOpen(): void;
   appClose(): void;

@@ -37,12 +37,17 @@ export const INITIAL_ORB_STATE: OrbState = {
 export function orbReducer(state: OrbState, event: OrbEvent): OrbState {
   switch (event.type) {
     case "summon":
-      return state.name === "dormant" || state.name === "bargeIn"
-        ? { ...INITIAL_ORB_STATE, name: "listening" }
-        : state;
+      // Coming from a fresh wake word: go to listening (grey/idle color).
+      // Coming from a barge-in: STAY bargeIn (orange) through the follow-up
+      // recording — runTurn() dispatches summon right after bargeIn in the same
+      // tick, and React batches both into one render, so if we reset to
+      // "listening" here the orange state is never actually visible.
+      if (state.name === "dormant") return { ...INITIAL_ORB_STATE, name: "listening" };
+      if (state.name === "bargeIn") return { ...INITIAL_ORB_STATE, name: "bargeIn" };
+      return state;
 
     case "submit":
-      return state.name === "listening"
+      return state.name === "listening" || state.name === "bargeIn"
         ? { ...state, name: "processing", transcript: event.transcript, error: null }
         : state;
 

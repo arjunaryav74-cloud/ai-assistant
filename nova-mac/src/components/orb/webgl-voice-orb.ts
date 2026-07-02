@@ -371,7 +371,9 @@ export class WebGLVoiceOrb {
     const introTarget = this.visible ? 1 : 0;
     this.introProgress += (introTarget - this.introProgress) * 0.12;
 
-    const lerp = 0.06;
+    // Higher = snappier state-color transitions (0.06 took ~1s to read as
+    // "arrived"; barge-in/thinking need to register almost immediately).
+    const lerp = 0.22;
     for (let i = 0; i < 3; i++) {
       this.curColor[i] += (this.targetColor[i]! - this.curColor[i]!) * lerp;
     }
