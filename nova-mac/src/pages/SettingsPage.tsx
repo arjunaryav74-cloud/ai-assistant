@@ -154,6 +154,7 @@ export function SettingsPage() {
   const [proactive, setProactive] = useState<ProactivePrefs>(DEFAULT_PROACTIVE_PREFS);
   const [section, setSection] = useState<SectionId>("general");
   const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [auth, setAuth] = useState<AuthState>({ signedIn: false, email: null });
   const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const savedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -163,7 +164,12 @@ export function SettingsPage() {
       const all = p as AllPrefs;
       setVoice({ ...DEFAULT_VOICE_PREFERENCES, ...all.voice });
       setProactive({ ...DEFAULT_PROACTIVE_PREFS, ...all.proactive });
-    }).catch(() => {});
+    }).catch((err) => {
+      // Silently falling back to defaults here is exactly what made "it
+      // doesn't save" so hard to diagnose — if THIS failed too, nothing you
+      // set will ever appear to persist even if the write actually worked.
+      console.error("[nova] loading settings failed, showing defaults:", err);
+    });
     nova().authStatus().then(setAuth).catch(() => {});
     return () => {
       if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -176,9 +182,13 @@ export function SettingsPage() {
     try {
       await nova().prefsSet({ voice: voiceNext, proactive: proactiveNext });
       setSaveState("saved");
+      setSaveError(null);
       if (savedTimerRef.current) clearTimeout(savedTimerRef.current);
       savedTimerRef.current = setTimeout(() => setSaveState("idle"), 1500);
-    } catch {
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error("[nova] settings save failed:", err);
+      setSaveError(message);
       setSaveState("error");
     }
   }
@@ -502,14 +512,15 @@ export function SettingsPage() {
           </div>
 
           {/* Save indicator */}
-          <div className="w-24 flex justify-end pt-1 flex-shrink-0">
+          <div className="w-48 flex flex-col items-end gap-1 pt-1 flex-shrink-0">
             {saveState !== "idle" && (
               <span
+                title={saveState === "error" ? (saveError ?? undefined) : undefined}
                 className={cn(
                   "flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium",
                   saveState === "saving" && "bg-white/[0.06] text-[--nova-text-secondary]",
                   saveState === "saved" && "bg-emerald-400/10 text-emerald-300",
-                  saveState === "error" && "bg-red-400/10 text-red-300",
+                  saveState === "error" && "bg-red-400/10 text-red-300 cursor-help",
                 )}
               >
                 <span
@@ -523,6 +534,11 @@ export function SettingsPage() {
                 {saveState === "saving" && "Saving"}
                 {saveState === "saved" && "Saved"}
                 {saveState === "error" && "Failed"}
+              </span>
+            )}
+            {saveState === "error" && saveError && (
+              <span className="text-[10.5px] leading-snug text-red-300/80 text-right max-w-[192px]">
+                {saveError}
               </span>
             )}
           </div>

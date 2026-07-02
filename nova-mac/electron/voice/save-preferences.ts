@@ -39,14 +39,20 @@ export async function saveVoicePreferences(patch: Partial<VoicePreferences>): Pr
     .select("voice")
     .eq("user_id", userId)
     .maybeSingle();
-  if (readError) throw new Error(`Reading existing voice prefs failed: ${readError.message}`);
+  if (readError) {
+    console.error("[nova] saveVoicePreferences: read existing failed:", readError);
+    throw new Error(`Reading existing voice prefs failed: ${readError.message}`);
+  }
 
   const merged = { ...(existing?.voice ?? {}), ...patch };
 
   const { error: writeError } = await supabase
     .from("user_preferences")
     .upsert({ user_id: userId, voice: merged }, { onConflict: "user_id" });
-  if (writeError) throw new Error(`Saving voice prefs failed: ${writeError.message}`);
+  if (writeError) {
+    console.error("[nova] saveVoicePreferences: upsert failed:", writeError, "userId:", userId);
+    throw new Error(`Saving voice prefs failed: ${writeError.message}`);
+  }
 }
 
 export async function saveProactivePreferences(patch: Partial<ProactivePrefs>): Promise<void> {
@@ -55,7 +61,10 @@ export async function saveProactivePreferences(patch: Partial<ProactivePrefs>): 
   const { error } = await supabase
     .from("user_preferences")
     .upsert({ user_id: userId, ...proactiveToRow(patch) }, { onConflict: "user_id" });
-  if (error) throw new Error(`Saving proactive prefs failed: ${error.message}`);
+  if (error) {
+    console.error("[nova] saveProactivePreferences: upsert failed:", error, "userId:", userId);
+    throw new Error(`Saving proactive prefs failed: ${error.message}`);
+  }
 }
 
 export async function getAllPreferences(): Promise<{ voice: VoicePreferences; proactive: ProactivePrefs }> {

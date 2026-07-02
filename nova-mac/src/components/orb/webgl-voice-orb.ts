@@ -371,9 +371,12 @@ export class WebGLVoiceOrb {
     const introTarget = this.visible ? 1 : 0;
     this.introProgress += (introTarget - this.introProgress) * 0.12;
 
-    // Higher = snappier state-color transitions (0.06 took ~1s to read as
-    // "arrived"; barge-in/thinking need to register almost immediately).
-    const lerp = 0.22;
+    // Higher = snappier state-color transitions. 0.06 took ~1s to read as
+    // "arrived"; 0.22 was still visibly laggy against how fast state
+    // actually changes (listening -> thinking -> speaking can flip within a
+    // couple hundred ms) — the color needs to read as real-time feedback,
+    // not catch up after the fact.
+    const lerp = 0.45;
     for (let i = 0; i < 3; i++) {
       this.curColor[i] += (this.targetColor[i]! - this.curColor[i]!) * lerp;
     }

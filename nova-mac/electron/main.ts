@@ -54,19 +54,22 @@ let orbHideTimer: ReturnType<typeof setTimeout> | null = null;
 let orbUserPositioned = false;
 let orbMoveIsProgrammatic = false;
 
-/** Wrap any programmatic setBounds/setPosition call so the resulting `moved`
- *  event isn't mistaken for a user drag. */
-function moveOrbProgrammatically(fn: () => void): void {
+/** Wrap any programmatic setBounds/setPosition call — sync or the animated
+ *  async resize — so the `moved`/`move` events it triggers aren't mistaken
+ *  for a user drag. Awaiting it (as `setOrbExpanded` does) means the
+ *  suppression window tracks the *actual* operation instead of guessing a
+ *  fixed timeout long enough to outlast it. */
+async function moveOrbProgrammatically(fn: () => void | Promise<void>): Promise<void> {
   orbMoveIsProgrammatic = true;
-  fn();
-  // resizeOrb's setBounds(..., true) triggers macOS's native animated resize
-  // (~0.2–0.25s), which fires `moved`/`move` repeatedly for its whole
-  // duration — the suppression window has to comfortably outlast that, not
-  // just the instant of the call, or the animation's tail end gets read as a
-  // real user drag.
-  setTimeout(() => {
-    orbMoveIsProgrammatic = false;
-  }, 350);
+  try {
+    await fn();
+  } finally {
+    // Give the last native moved/move event a tick to land before resuming
+    // user-drag tracking.
+    setTimeout(() => {
+      orbMoveIsProgrammatic = false;
+    }, 60);
+  }
 }
 
 function clearOrbHideTimer(): void {
@@ -87,10 +90,19 @@ function scheduleOrbAutoHide(delayMs: number): void {
   }, delayMs);
 }
 
-function setOrbExpanded(on: boolean): void {
+/**
+ * Resize the window, THEN tell the renderer to swap MiniOrb <-> the panel.
+ * Broadcasting `OrbExpandedChanged` before the resize finishes (the previous
+ * behavior) mounted the panel's percentage/flex-based layout while the
+ * window was still mid-animation, so it reflowed at every intermediate
+ * window size for ~220ms — the "flashing/freaking out" on click. Waiting
+ * for the real final size means the panel only ever renders once, correctly.
+ */
+async function setOrbExpanded(on: boolean): Promise<void> {
   if (!orbWin || orbWin.isDestroyed()) return;
   orbExpanded = on;
-  moveOrbProgrammatically(() => resizeOrb(orbWin!, on));
+  await moveOrbProgrammatically(() => resizeOrb(orbWin!, on));
+  if (orbWin.isDestroyed()) return;
   orbWin.webContents.send(IpcChannel.OrbExpandedChanged, on);
 }
 
@@ -224,24 +236,29 @@ app.whenReady().then(async () => {
     import("./memory/manage").then((m) => m.deleteMemoryIpc(id)),
   );
 
-  // Wake-word controller: resolve models dir for dev vs packaged builds, and
-  // seed the fire threshold from the user's saved sensitivity instead of the
-  // engine's hardcoded default — otherwise the Settings slider would only
-  // ever take effect after the next PrefsSet call, never on launch.
+  // Wake-word controller: resolve models dir for dev vs packaged builds and
+  // start it IMMEDIATELY with the engine's built-in default threshold — do
+  // not block startup on a Supabase round-trip first. That was tried and is
+  // a real regression: it delayed orb-window creation, wake-word start, tray,
+  // and hotkey registration behind a network call with no timeout, so a
+  // slow/unreachable Supabase made wake word (and everything after it in this
+  // startup sequence) late or effectively never-starting. The saved
+  // sensitivity is instead applied a moment later, in the background,
+  // without blocking anything.
   const modelsDir = app.isPackaged
     ? join(process.resourcesPath, "wakeword-models")
     : join(app.getAppPath(), "electron", "wakeword", "models");
-  const initialVoicePrefs = await import("./voice/preferences").then((m) => m.getVoicePreferences());
-  const wakeController = new WakeWordController(
-    modelsDir,
-    wakeSensitivityToThreshold(initialVoicePrefs.wakeWordSensitivity),
-  );
+  const wakeController = new WakeWordController(modelsDir);
   wake = wakeController;
   wakeController.start(() => {
     wakeController.pauseForTurn(); // stop ingesting frames during the voice turn
     activateOrb(); // pop the mini orb in; auto-hides once the turn settles
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send(IpcChannel.WakeDetected);
   });
+  void import("./voice/preferences")
+    .then((m) => m.getVoicePreferences())
+    .then((prefs) => wakeController.setThreshold(wakeSensitivityToThreshold(prefs.wakeWordSensitivity)))
+    .catch((err) => console.error("[nova] failed to load saved wake sensitivity, using default:", err));
   registerWakeBridge({
     pushFrame: (buf) => wakeController.pushFrame(buf),
     setEnabled: (on) => wakeController.setEnabled(on),

@@ -73,22 +73,39 @@ with `orbArmedForAutoHide` in `main.ts`:
   back to the mini orb, it does not vanish.
 `IpcChannel.OrbSetExpanded(on, manual?)` carries this distinction from the renderer; main
 resizes via `resizeOrb` and positions fresh appearances via `positionOrbTopRight` (`window.ts`),
-broadcasting `IpcChannel.OrbExpandedChanged`. `resizeOrb` anchors the **orb's visual center**,
-not a window corner — it used to anchor the top-right corner, which made the orb appear to jump
-~140px left / ~50px down on expand, since the orb sits near the top of the tall 520px panel
-rather than centered in the whole window. `orbCenterOffset()` hand-computes where the orb's
-center sits relative to the window's top-left for each state (mini: window center, since
-`MiniOrb.tsx` fills the window and centers its content; panel: `App.tsx`'s 8px wrapper padding +
-a 34px icon strip + half the 118px orb, from `Orb.tsx`'s actual layout) and solves for the
-window position that keeps that point at the same screen pixel across the resize. These are
-hand-tracked constants, not measured — if `Orb.tsx`'s icon-strip height, wrapper padding, or
-panel orb size ever change, `orbCenterOffset()` in `window.ts` needs updating too.
-`resizeOrb`'s `setBounds` call passes `animate: true` (macOS-only third-party-ish Electron
-param) — getting the destination math right alone wasn't enough to stop the "teleport" feeling;
-`setBounds`'s default is an instant snap with zero transition regardless of how correct the
-target position is. `moveOrbProgrammatically`'s suppression window (`main.ts`) is 350ms to
-comfortably outlast that native animation (~0.2–0.25s), since it fires `moved`/`move` events
-throughout, not just once at the end.
+broadcasting `IpcChannel.OrbExpandedChanged`.
+
+**Expand/collapse resize — three layered fixes, each targeting a different failure mode found
+by actually using it**: `resizeOrb` anchors the **orb's visual center**, not a window corner —
+anchoring the top-right corner made the orb jump ~140px left / ~50px down on expand, since the
+orb sits near the top of the tall 520px panel, not centered in the window. `orbCenterOffset()`
+and `orbBoxPosition()` (`shared/orb-geometry.ts` — the single source of truth for both window
+math and renderer positioning, so they can't drift out of sync) hand-compute where the orb's
+center/box sits relative to the window's top-left per state and solve for the window position
+that keeps that point at the same screen pixel across the resize. These are hand-tracked
+constants, not measured — if `Orb.tsx`'s icon-strip height, wrapper padding, or panel orb size
+ever change, `shared/orb-geometry.ts` needs updating too.
+
+Getting the destination right wasn't enough on its own: `resizeOrb` animates via
+`animateWindowBounds()` (`window.ts`), which steps `setBounds(..., false)` manually across ~13
+frames over 220ms with an ease-out curve — **not** `setBounds(bounds, true)` (native macOS
+animated resize). That was tried first and is a real regression: Electron's native `animate`
+flag is known to break window transparency mid-animation on macOS, flashing an opaque white/
+black backing for a transparent frameless window's whole resize. Manual stepping keeps every
+individual call in the always-transparent-safe `animate: false` mode.
+
+`resizeOrb` returns a `Promise` that resolves when the animation finishes; `setOrbExpanded`
+(`main.ts`) is `async` and awaits it *before* broadcasting `OrbExpandedChanged`. Broadcasting
+immediately (the original behavior) mounted the panel's percentage/flex-based layout while the
+window was still mid-resize, so it reflowed at every intermediate window size for the whole
+~220ms — the "flashing/freaking out" on click. `MiniOrb.tsx` also pins its orb's visual box to a
+fixed pixel position (`orbBoxPosition`, not flex/percentage-centered) for the same reason: since
+it may still be mounted while the window animates toward the panel size, a centered layout would
+visibly drift toward the growing window's live center.
+
+`moveOrbProgrammatically` (`main.ts`) accepts either a sync callback or (for the animated resize)
+a `Promise`, awaiting it so the "was this move programmatic" suppression window tracks the
+*actual* operation instead of guessing a fixed timeout long enough to outlast it.
 
 **Dragging the mini orb is fully custom JS, not a native OS drag region**
 (`src/hooks/useDraggableOrb.ts`). `-webkit-app-region: drag` + a click handler on the same
@@ -212,8 +229,10 @@ wake word fires (main)  ──activateOrb + IPC WakeDetected──▶  useVoice.
   etc.) — acknowledged with the `gotIt` cue and the turn ends without calling Claude at all.
 - **WebGL VoiceOrb** (`src/components/orb/webgl-voice-orb.ts` + `VoiceOrb.tsx` wrapper): a
   fluid-noise plasma sphere (ported from a user-supplied reference), 4 color states — idle=grey,
-  thinking=purple, speaking=green, bargein=orange — smoothly lerped (rate 0.22/frame, tuned for
-  snappy but not jarring transitions). `VoiceOrb`'s 6-value `visualMode` collapses onto these 4;
+  thinking=purple, speaking=green, bargein=orange — smoothly lerped (rate 0.45/frame; started at
+  0.06, felt like it took ~1s to "arrive", then 0.22 was still visibly laggy against how fast
+  state actually changes — the color has to read as real-time feedback of what's happening right
+  now, not catch up after the fact). `VoiceOrb`'s 6-value `visualMode` collapses onto these 4;
   `listening` reads as idle. Same external API as the old Canvas2D orb it replaced.
 - **Streaming TTS** (`src/voice/player.ts`): a `SentenceBuffer` chunks the streamed reply into
   sentences; chunks are synthesized ahead (prefetch depth 2) and scheduled gaplessly on a
@@ -281,7 +300,15 @@ on any Supabase error instead of swallowing it (previously every read/write ther
 actually persisted) — the thrown error propagates through `ipcMain.handle` back to
 `SettingsPage.tsx`'s existing try/catch, which is what makes its "Save failed" state real.
 `getVoicePreferences()` also filters by `user_id` explicitly now instead of relying solely on
-RLS to scope an otherwise-unfiltered query.
+RLS to scope an otherwise-unfiltered query. `save-preferences.ts` also `console.error`s at every
+throw site (visible in the `npm run dev` terminal, main process) — Electron's `ipcMain.handle`
+rejection only carries `Error.message` across to the renderer, not the full Postgres/Supabase
+error object, so the terminal log is the only place to see the *actual* underlying cause (RLS
+rejection, FK violation, network error, etc.) versus just "Failed" in the UI.
+`SettingsPage.tsx` shows the caught error's message inline under the save badge (and as its
+`title` tooltip) instead of only a generic "Failed" — and its initial `prefsGet()` load also
+logs its error now instead of silently falling back to defaults, which previously made a
+*read* failure look identical to "your save never happened" on next launch.
 
 **Proactive prefs** map camelCase `ProactivePrefs` ↔ snake_case DB columns: `proactiveMode` →
 `proactive_tier`, `dailyBriefEnabled` → `brief_enabled` (see `save-preferences.ts`).
@@ -337,10 +364,16 @@ produces near-zero scores rather than an error, so the exact contract matters:
   runs in the main process, but the "Wake word sensitivity" slider lives in the renderer's
   Settings page, so it has to be pushed across: `wakeSensitivityToThreshold()` (pure, tested)
   maps the slider's sense (higher = fires easier) onto the engine's inverted one (score must
-  *exceed* threshold, so lower = fires easier). `main.ts` seeds the initial threshold from saved
-  prefs at boot (`getVoicePreferences()` before constructing `WakeWordController`) and calls
-  `wake?.setThreshold(...)` again inside the `PrefsSet` handler so a change takes effect
-  immediately, not just after the next launch. The mapped range is deliberately narrow and
+  *exceed* threshold, so lower = fires easier). `WakeWordController` starts **immediately** at
+  boot with its built-in default threshold — it must not be blocked on a Supabase round-trip
+  first. That was tried (`await getVoicePreferences()` before constructing the controller) and
+  is a real regression: it delays orb-window creation, wake-word start, tray, and hotkey
+  registration behind a network call with no timeout, so a slow/unreachable Supabase made wake
+  word (and everything else in that startup sequence) late or effectively never-starting. The
+  saved sensitivity is instead fetched and applied via `wakeController.setThreshold(...)` in the
+  background right after `start()`, non-blocking; `PrefsSet` calls `wake?.setThreshold(...)`
+  again on every change so it takes effect immediately, not just after the next launch. The
+  mapped range is deliberately narrow and
   floored (real slider domain 0.35..0.85 -> threshold ~0.059..0.037) — this control did nothing
   until it was wired up, so anyone who'd already dragged it to max thinking it had no effect
   would otherwise land on a threshold low enough to false-trigger on background noise the moment

@@ -1,10 +1,9 @@
 import { BrowserWindow, screen } from "electron";
 import { join } from "node:path";
+import { ORB_MINI_SIZE, ORB_PANEL_WIDTH, ORB_PANEL_HEIGHT, orbCenterOffset } from "@shared/orb-geometry";
 
-// Two orb window states: a tiny floating Siri-like orb, and the expanded chat panel.
-export const ORB_MINI_SIZE = 96;
-export const ORB_PANEL_WIDTH = 380;
-export const ORB_PANEL_HEIGHT = 520;
+export { ORB_MINI_SIZE, ORB_PANEL_WIDTH, ORB_PANEL_HEIGHT };
+
 // Tight to the corner, hugging the menu bar the way Siri's own icon does.
 const ORB_MARGIN = 8;
 
@@ -12,28 +11,6 @@ function orbBounds(expanded: boolean): { width: number; height: number } {
   return expanded
     ? { width: ORB_PANEL_WIDTH, height: ORB_PANEL_HEIGHT }
     : { width: ORB_MINI_SIZE, height: ORB_MINI_SIZE };
-}
-
-// Where the orb's visual center sits relative to the window's top-left, per
-// state — must track the actual rendered layout so resizeOrb can keep the
-// *orb* visually anchored across expand/collapse, not just a window corner.
-// MiniOrb (src/components/orb/MiniOrb.tsx) fills the whole mini window and
-// centers its content, so it's simply the window's center. The expanded
-// panel (src/components/orb/Orb.tsx, wrapped by src/App.tsx) stacks, from
-// the window's top: the App.tsx wrapper's 8px padding, then a 34px icon
-// strip (10px top padding + 24px buttons), then the orb itself at 118px —
-// horizontally it's simply centered (the 8px wrapper padding is symmetric).
-const PANEL_WRAPPER_PADDING = 8;
-const PANEL_ICON_STRIP_HEIGHT = 34;
-const PANEL_ORB_SIZE = 118;
-
-function orbCenterOffset(expanded: boolean): { x: number; y: number } {
-  return expanded
-    ? {
-        x: ORB_PANEL_WIDTH / 2,
-        y: PANEL_WRAPPER_PADDING + PANEL_ICON_STRIP_HEIGHT + PANEL_ORB_SIZE / 2,
-      }
-    : { x: ORB_MINI_SIZE / 2, y: ORB_MINI_SIZE / 2 };
 }
 
 /**
@@ -56,6 +33,53 @@ export function positionOrbTopRight(win: BrowserWindow, expanded: boolean): void
   );
 }
 
+const RESIZE_ANIMATION_MS = 220;
+const easeOutCubic = (t: number): number => 1 - Math.pow(1 - t, 3);
+
+/**
+ * Step a window's bounds from its current rect to `target` over `durationMs`,
+ * always with `setBounds(..., false)` (no native animation flag). Electron's
+ * native `animate: true` resize is well known to break window transparency
+ * on macOS mid-animation — a transparent, frameless window flashes an opaque
+ * white/black backing for the animation's duration, which is worse than the
+ * instant snap it was meant to fix. Stepping manually keeps every individual
+ * `setBounds` call in the always-transparent-safe `animate: false` mode
+ * while still reading as a smooth resize.
+ */
+function animateWindowBounds(
+  win: BrowserWindow,
+  target: { x: number; y: number; width: number; height: number },
+  durationMs: number,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const from = win.getBounds();
+    const start = Date.now();
+    function step() {
+      if (win.isDestroyed()) {
+        resolve();
+        return;
+      }
+      const t = Math.min(1, (Date.now() - start) / durationMs);
+      const e = easeOutCubic(t);
+      win.setBounds(
+        {
+          x: Math.round(from.x + (target.x - from.x) * e),
+          y: Math.round(from.y + (target.y - from.y) * e),
+          width: Math.round(from.width + (target.width - from.width) * e),
+          height: Math.round(from.height + (target.height - from.height) * e),
+        },
+        false,
+      );
+      if (t < 1) {
+        setTimeout(step, 1000 / 60);
+      } else {
+        resolve();
+      }
+    }
+    step();
+  });
+}
+
 /**
  * Resize in place, keeping the *orb itself* visually anchored — not a window
  * corner. Anchoring the top-right corner made the orb appear to jump ~140px
@@ -63,23 +87,24 @@ export function positionOrbTopRight(win: BrowserWindow, expanded: boolean): void
  * panel rather than centered in the whole window; solving for the window
  * position that keeps `orbCenterOffset` at the same screen pixel before and
  * after resizing keeps the orb visually still while the panel grows around it.
+ * Resolves once the animation finishes — callers use that to delay swapping
+ * which React component is mounted until the window is at its final size, so
+ * the panel's percentage-based layout never has to reflow against an
+ * intermediate window size mid-animation.
  */
-export function resizeOrb(win: BrowserWindow, expanded: boolean): void {
+export function resizeOrb(win: BrowserWindow, expanded: boolean): Promise<void> {
   const current = win.getBounds();
   const size = orbBounds(expanded);
   const from = orbCenterOffset(!expanded);
   const to = orbCenterOffset(expanded);
-  win.setBounds(
+  return animateWindowBounds(
+    win,
     {
       x: current.x + from.x - to.x,
       y: current.y + from.y - to.y,
       ...size,
     },
-    // true = macOS-native animated resize. The correct destination math above
-    // fixes *where* the orb ends up; this fixes *how* it gets there — without
-    // it `setBounds` snaps the whole window instantly with zero transition,
-    // which reads as a teleport no matter how correct the destination is.
-    true,
+    RESIZE_ANIMATION_MS,
   );
 }
 
