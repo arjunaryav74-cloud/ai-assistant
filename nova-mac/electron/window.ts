@@ -1,10 +1,9 @@
 import { BrowserWindow, screen } from "electron";
 import { join } from "node:path";
+import { ORB_MINI_SIZE, ORB_PANEL_WIDTH, ORB_PANEL_HEIGHT, orbCenterOffset } from "@shared/orb-geometry";
 
-// Two orb window states: a tiny floating Siri-like orb, and the expanded chat panel.
-export const ORB_MINI_SIZE = 96;
-export const ORB_PANEL_WIDTH = 380;
-export const ORB_PANEL_HEIGHT = 520;
+export { ORB_MINI_SIZE, ORB_PANEL_WIDTH, ORB_PANEL_HEIGHT };
+
 // Tight to the corner, hugging the menu bar the way Siri's own icon does.
 const ORB_MARGIN = 8;
 
@@ -34,12 +33,79 @@ export function positionOrbTopRight(win: BrowserWindow, expanded: boolean): void
   );
 }
 
-/** Resize in place, keeping the top-right corner anchored on the current display. */
-export function resizeOrb(win: BrowserWindow, expanded: boolean): void {
+const RESIZE_ANIMATION_MS = 220;
+const easeOutCubic = (t: number): number => 1 - Math.pow(1 - t, 3);
+
+/**
+ * Step a window's bounds from its current rect to `target` over `durationMs`,
+ * always with `setBounds(..., false)` (no native animation flag). Electron's
+ * native `animate: true` resize is well known to break window transparency
+ * on macOS mid-animation — a transparent, frameless window flashes an opaque
+ * white/black backing for the animation's duration, which is worse than the
+ * instant snap it was meant to fix. Stepping manually keeps every individual
+ * `setBounds` call in the always-transparent-safe `animate: false` mode
+ * while still reading as a smooth resize.
+ */
+function animateWindowBounds(
+  win: BrowserWindow,
+  target: { x: number; y: number; width: number; height: number },
+  durationMs: number,
+): Promise<void> {
+  return new Promise((resolve) => {
+    const from = win.getBounds();
+    const start = Date.now();
+    function step() {
+      if (win.isDestroyed()) {
+        resolve();
+        return;
+      }
+      const t = Math.min(1, (Date.now() - start) / durationMs);
+      const e = easeOutCubic(t);
+      win.setBounds(
+        {
+          x: Math.round(from.x + (target.x - from.x) * e),
+          y: Math.round(from.y + (target.y - from.y) * e),
+          width: Math.round(from.width + (target.width - from.width) * e),
+          height: Math.round(from.height + (target.height - from.height) * e),
+        },
+        false,
+      );
+      if (t < 1) {
+        setTimeout(step, 1000 / 60);
+      } else {
+        resolve();
+      }
+    }
+    step();
+  });
+}
+
+/**
+ * Resize in place, keeping the *orb itself* visually anchored — not a window
+ * corner. Anchoring the top-right corner made the orb appear to jump ~140px
+ * left and ~50px down on expand, because it sits near the top of the tall
+ * panel rather than centered in the whole window; solving for the window
+ * position that keeps `orbCenterOffset` at the same screen pixel before and
+ * after resizing keeps the orb visually still while the panel grows around it.
+ * Resolves once the animation finishes — callers use that to delay swapping
+ * which React component is mounted until the window is at its final size, so
+ * the panel's percentage-based layout never has to reflow against an
+ * intermediate window size mid-animation.
+ */
+export function resizeOrb(win: BrowserWindow, expanded: boolean): Promise<void> {
   const current = win.getBounds();
   const size = orbBounds(expanded);
-  const right = current.x + current.width;
-  win.setBounds({ x: right - size.width, y: current.y, ...size }, false);
+  const from = orbCenterOffset(!expanded);
+  const to = orbCenterOffset(expanded);
+  return animateWindowBounds(
+    win,
+    {
+      x: current.x + from.x - to.x,
+      y: current.y + from.y - to.y,
+      ...size,
+    },
+    RESIZE_ANIMATION_MS,
+  );
 }
 
 /**
@@ -80,7 +146,12 @@ export function createOrbWindow(): BrowserWindow {
     backgroundColor: "#00000000",
     hasShadow: false,
     alwaysOnTop: true,
-    resizable: false,
+    // Deliberately NOT resizable:false — this is a frameless window so there
+    // are no visible OS resize handles to disable anyway, and macOS's
+    // NSWindowStyleMaskResizable bit (what this maps to) has been known to
+    // interfere with purely-programmatic setBounds calls on some Electron/
+    // macOS combinations. resizeOrb animates the window between mini and
+    // panel sizes entirely via setBounds, so this needs to be unconstrained.
     fullscreenable: false,
     focusable: true,
     skipTaskbar: true,

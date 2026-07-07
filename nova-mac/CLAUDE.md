@@ -71,33 +71,91 @@ with `orbArmedForAutoHide` in `main.ts`:
 - **Manual activation** (orb click, `Cmd+Shift+Space`, tray "Open Nova", closing the Settings
   window) → disarms auto-hide and force-shows the window; collapsing afterward only shrinks it
   back to the mini orb, it does not vanish.
-`IpcChannel.OrbSetExpanded(on, manual?)` carries this distinction from the renderer; when no
-custom position is set, main resizes/positions top-right-anchored via `resizeOrb`/
-`positionOrbTopRight` (`window.ts`) and broadcasts `IpcChannel.OrbExpandedChanged`.
+`IpcChannel.OrbSetExpanded(on, manual?)` carries this distinction from the renderer; main
+resizes via `resizeOrb` and positions fresh appearances via `positionOrbTopRight` (`window.ts`),
+broadcasting `IpcChannel.OrbExpandedChanged`.
 
-**Dragging**: `MiniOrb.tsx` marks its whole window `WebkitAppRegion: "drag"` (Chromium still
-delivers the underlying mousedown/mouseup to React even inside a drag region, so a movement
-threshold in the component tells a click from a drag) and the expanded panel's icon-button strip
-is a drag region too. `main.ts` listens for the window's native `moved` event to detect *real*
-user drags — `orbMoveIsProgrammatic` + `moveOrbProgrammatically()` suppress the `moved` events
-our own `positionOrbTopRight`/`resizeOrb`/`setPosition` calls trigger, since Electron fires
-`moved` for programmatic changes too and there's no other way to tell them apart. Once a real
-drag is detected, `orbUserPositioned` flips on and the spot is persisted via
-`electron/orb-position-store.ts` (plain JSON under `userData`, restored on next launch);
-`positionOrb()` becomes a no-op as long as `isPointOnAnyDisplay` says that spot is still on
-some connected display. `watchDisplayChanges` (called once on `orbWin` in `main.ts`) falls back
-to the default top-right corner and clears `orbUserPositioned` if a monitor change leaves the
-saved spot off-screen.
+**Expand/collapse resize — three layered fixes, each targeting a different failure mode found
+by actually using it**: `resizeOrb` anchors the **orb's visual center**, not a window corner —
+anchoring the top-right corner made the orb jump ~140px left / ~50px down on expand, since the
+orb sits near the top of the tall 520px panel, not centered in the window. `orbCenterOffset()`
+and `orbBoxPosition()` (`shared/orb-geometry.ts` — the single source of truth for both window
+math and renderer positioning, so they can't drift out of sync) hand-compute where the orb's
+center/box sits relative to the window's top-left per state and solve for the window position
+that keeps that point at the same screen pixel across the resize. These are hand-tracked
+constants, not measured — if `Orb.tsx`'s icon-strip height, wrapper padding, or panel orb size
+ever change, `shared/orb-geometry.ts` needs updating too.
 
-**Jelly wiggle while dragging**: separately from `moved`, `main.ts` also listens to the
-cross-platform `move` event (fires continuously *during* a drag, unlike `moved`) to compute
-live velocity and broadcast it as `IpcChannel.OrbDragVelocity`. `useOrbDragWiggle`
-(`src/hooks/useOrbDragWiggle.ts`) turns that into a squash-and-stretch transform — pure math in
-`velocityToWiggle()` (tested in isolation, no React/DOM needed) stretches the orb along the
-direction of motion and squashes it perpendicular, capped so it can't grow enough to clip its
-window; the hook self-decays back to neutral if no new velocity tick arrives within 140ms. Both
-`MiniOrb.tsx` and the expanded panel's orb (`Orb.tsx`) wrap `VoiceOrb` in a `motion.div` driven
-by this hook with `jellySpring` (`src/motion/springs.ts`) for the bouncy settle.
+Getting the destination right wasn't enough on its own: `resizeOrb` animates via
+`animateWindowBounds()` (`window.ts`), which steps `setBounds(..., false)` manually across ~13
+frames over 220ms with an ease-out curve — **not** `setBounds(bounds, true)` (native macOS
+animated resize). That was tried first and is a real regression: Electron's native `animate`
+flag is known to break window transparency mid-animation on macOS, flashing an opaque white/
+black backing for a transparent frameless window's whole resize. Manual stepping keeps every
+individual call in the always-transparent-safe `animate: false` mode.
+
+`resizeOrb` returns a `Promise` that resolves when the animation finishes; `setOrbExpanded`
+(`main.ts`) is `async` and awaits it *before* broadcasting `OrbExpandedChanged`. Broadcasting
+immediately (the original behavior) mounted the panel's percentage/flex-based layout while the
+window was still mid-resize, so it reflowed at every intermediate window size for the whole
+~220ms — the "flashing/freaking out" on click. `MiniOrb.tsx` also pins its orb's visual box to a
+fixed pixel position (`orbBoxPosition`, not flex/percentage-centered) for the same reason: since
+it may still be mounted while the window animates toward the panel size, a centered layout would
+visibly drift toward the growing window's live center.
+
+The `OrbSetExpanded(true, manual)` handler has a special case for a window that's currently
+**hidden entirely** (not just mini) — it appears directly at the final expanded bounds instead
+of also running the animated resize afterward. That second part used to be a real bug: it fell
+through into `setOrbExpanded`'s animated `resizeOrb`, whose math assumed the window was still
+mini-sized, when it had in fact just been jumped straight to panel size a moment earlier by
+`positionOrb(true)` — a genuine double-resize conflict producing visible jank on top of whatever
+the animation was already doing. `createOrbWindow` also deliberately does **not** set
+`resizable: false` — a frameless window has no OS resize handles to disable regardless, and that
+flag maps to `NSWindowStyleMaskResizable`, which has been known to interfere with purely
+programmatic `setBounds` on some Electron/macOS combinations; since the entire mini↔panel
+transition is driven by `setBounds`, it needs to be unconstrained.
+
+`moveOrbProgrammatically` (`main.ts`) accepts either a sync callback or (for the animated resize)
+a `Promise`, awaiting it so the "was this move programmatic" suppression window tracks the
+*actual* operation instead of guessing a fixed timeout long enough to outlast it.
+
+**Dragging the mini orb is fully custom JS, not a native OS drag region**
+(`src/hooks/useDraggableOrb.ts`). `-webkit-app-region: drag` + a click handler on the same
+element was tried first and is unreliable in Electron — once the OS takes over a drag region,
+the page stops consistently receiving the mouse events a click handler needs, so clicking the
+orb silently broke. Instead `MiniOrb.tsx` is `WebkitAppRegion: "no-drag"` and does the whole
+gesture itself: on mousedown it reads its own `window.screenX/screenY` as the drag origin,
+tracks `mousemove` at the document level, and once movement crosses a small threshold sends
+`IpcChannel.OrbDragMove {x, y}` (absolute target position) on every frame — `main.ts` just calls
+`orbWin.setPosition(x, y)`. A mouseup with no real movement never touches the window at all and
+calls `onClick` directly; a real drag ends with a brief momentum coast (~170ms, exponential
+velocity decay) so it slides a little past release instead of stopping dead, then sends
+`IpcChannel.OrbDragEnd` once the coast settles. That's the single point where `orbUserPositioned`
+flips on and the spot is persisted via `electron/orb-position-store.ts` (plain JSON under
+`userData`, restored on next launch); `positionOrb()` becomes a no-op as long as
+`isPointOnAnyDisplay` says that spot is still on some connected display. `watchDisplayChanges`
+(called once on `orbWin` in `main.ts`) falls back to the default top-right corner and clears
+`orbUserPositioned` if a monitor change leaves the saved spot off-screen.
+
+The expanded panel's icon-button strip is still a native `WebkitAppRegion: "drag"` region (its
+buttons are separately marked `no-drag`, which — unlike a drag region with a raw click handler
+directly on it — reliably stays clickable, so it never had the mini-orb's bug). `main.ts` still
+tracks that path via the native `moved`/`move` events; `orbMoveIsProgrammatic` +
+`moveOrbProgrammatically()` suppress the events our own `positionOrbTopRight`/`resizeOrb`/
+`setPosition`/`OrbDragMove` calls trigger, since Electron fires them for programmatic changes
+too and there's no other way to tell them apart from a real drag.
+
+**Jelly wiggle while dragging**: `main.ts`'s native `move` listener (panel drags) broadcasts live
+velocity as `IpcChannel.OrbDragVelocity`; the mini orb's manual drag computes velocity locally
+instead and never needs that broadcast. Both feed into the same pure `velocityToWiggle()`
+(`src/hooks/useOrbDragWiggle.ts`, tested in isolation, no React/DOM needed), which turns
+velocity into a squash-and-stretch transform — stretched along the direction of motion, squashed
+perpendicular, capped so it can't grow enough to clip its window. `useWiggleState()` exposes
+`{wiggle, reportVelocity}` so either source can drive it and self-decays to neutral if no new
+report arrives within 140ms; `useOrbDragWiggle()` is a thin wrapper over it that sources from the
+IPC broadcast (used by the panel). Both `MiniOrb.tsx` and `Orb.tsx` wrap `VoiceOrb` in a
+`motion.div` animated by the resulting wiggle with `jellySpring` (`src/motion/springs.ts`) for
+the bouncy settle.
 
 Voice turns (listening/thinking/speaking/barge-in) **never**
 auto-expand the panel — the orb's own color is the only feedback while it stays a corner orb;
@@ -135,7 +193,12 @@ don't load at startup.
 ## Auth & Supabase
 
 - Magic-link OTP (`auth.signInWithOtp`) with `emailRedirectTo: nova://auth-callback`.
-  `handleAuthCallback` tolerates both hash-token and `?code=` (PKCE) callback shapes.
+  `handleAuthCallback` tolerates both hash-token and `?code=` (PKCE) callback shapes, and calls
+  `ensureAppUser(userId)` (upserts into `public.users`, mirroring the web app's `ensureAppUser`
+  in `lib/auth/session.ts`) — every other table's `user_id` references `public.users(id)`, so a
+  user whose *first ever* sign-in happens through nova-mac (not the web app) would otherwise hit
+  a foreign-key violation on the first write anywhere (reminders, memories, Settings saves —
+  all silently, since Supabase doesn't throw on a failed write unless you check `.error`).
 - Sessions are persisted **encrypted** via Electron `safeStorage` (Keychain) to
   `userData/session.bin` — see `electron/session-store.ts`. Supabase client itself runs with
   `persistSession: false`; we restore manually on boot via `restoreSession()`.
@@ -177,10 +240,17 @@ wake word fires (main)  ──activateOrb + IPC WakeDetected──▶  useVoice.
   `isVoiceStopPhrase()` catches dismissals ("stop", "that'll be all", "thank you very much",
   etc.) — acknowledged with the `gotIt` cue and the turn ends without calling Claude at all.
 - **WebGL VoiceOrb** (`src/components/orb/webgl-voice-orb.ts` + `VoiceOrb.tsx` wrapper): a
-  fluid-noise plasma sphere (ported from a user-supplied reference), 4 color states — idle=grey,
-  thinking=purple, speaking=green, bargein=orange — smoothly lerped (rate 0.22/frame, tuned for
-  snappy but not jarring transitions). `VoiceOrb`'s 6-value `visualMode` collapses onto these 4;
-  `listening` reads as idle. Same external API as the old Canvas2D orb it replaced.
+  fluid-noise plasma sphere (ported from a user-supplied reference). Fixed 5-color scheme, each
+  an explicit, non-negotiable mapping (not derived/blended): idle=grey, **listening=blue**
+  (`#0A84FF`, matches `--nova-accent`), thinking=purple, speaking=green, bargein=orange. Earlier
+  this collapsed `listening` into `idle` ("still listening reads as calm/grey") — that was wrong;
+  the whole point of a distinct listening color is telling the user Nova is actively hearing them
+  apart from just sitting idle. `VoiceOrb`'s 6-value `visualMode` maps `"processing"` onto the
+  same purple as `"thinking"` (both read as "working on it") and everything else 1:1. Colors
+  lerp at rate 0.45/frame — started at 0.06 (~1s to visually "arrive"), 0.22 was still visibly
+  laggy against how fast state actually changes; needs to read as real-time feedback of what's
+  happening right now, not catch up after the fact. Same external API as the old Canvas2D orb it
+  replaced.
 - **Streaming TTS** (`src/voice/player.ts`): a `SentenceBuffer` chunks the streamed reply into
   sentences; chunks are synthesized ahead (prefetch depth 2) and scheduled gaplessly on a
   Web Audio timeline. `stop()`/barge-in aborts in-flight synth + sources.
@@ -220,6 +290,13 @@ on-fire callback that shows a Notification, summons the orb, and broadcasts
 - Persists user + assistant messages to Supabase after each turn
 - **Never `select("embedding")`** — memory queries always use an explicit column list
 
+**Model selection** (`electron/chat-turn.ts`): `VoicePreferences.modelPreference` (`"auto" |
+"light" | "heavy"`, Settings → General → AI model) overrides the built-in routing when pinned.
+`"auto"` (default) keeps voice turns always on the light model for latency and routes text turns
+through `inferComplexity()`; `"light"`/`"heavy"` force every turn to that model regardless.
+Fetched via `getVoicePreferences()` in the same `Promise.all` as history/context/timezone, so
+there's no extra round-trip latency on top of what was already there.
+
 ## App window — tabs (`src/AppShell.tsx`)
 
 Auth-gated. 28 px draggable title bar inset. Tab state via `useState<Tab>`. AppDock fixed at bottom.
@@ -233,7 +310,22 @@ Auth-gated. 28 px draggable title bar inset. Tab state via `useState<Tab>`. AppD
 
 **Preferences IPC**: `PrefsGet` returns `AllPrefs` (`voice` + `proactive`). After `PrefsSet`,
 main broadcasts `IpcChannel.PrefsChanged` with `updated.voice` to **all** windows so the orb's
-`useVoice` stays in sync without a reload.
+`useVoice` stays in sync without a reload, and pushes the sensitivity into the wake engine (see
+Wake word pipeline below). `electron/voice/save-preferences.ts` and `preferences.ts` **throw**
+on any Supabase error instead of swallowing it (previously every read/write there ignored
+`.error`, so a failed save still showed "Saved ✓" in Settings with no way to tell it hadn't
+actually persisted) — the thrown error propagates through `ipcMain.handle` back to
+`SettingsPage.tsx`'s existing try/catch, which is what makes its "Save failed" state real.
+`getVoicePreferences()` also filters by `user_id` explicitly now instead of relying solely on
+RLS to scope an otherwise-unfiltered query. `save-preferences.ts` also `console.error`s at every
+throw site (visible in the `npm run dev` terminal, main process) — Electron's `ipcMain.handle`
+rejection only carries `Error.message` across to the renderer, not the full Postgres/Supabase
+error object, so the terminal log is the only place to see the *actual* underlying cause (RLS
+rejection, FK violation, network error, etc.) versus just "Failed" in the UI.
+`SettingsPage.tsx` shows the caught error's message inline under the save badge (and as its
+`title` tooltip) instead of only a generic "Failed" — and its initial `prefsGet()` load also
+logs its error now instead of silently falling back to defaults, which previously made a
+*read* failure look identical to "your save never happened" on next launch.
 
 **Proactive prefs** map camelCase `ProactivePrefs` ↔ snake_case DB columns: `proactiveMode` →
 `proactive_tier`, `dailyBriefEnabled` → `brief_enabled` (see `save-preferences.ts`).
@@ -284,8 +376,31 @@ produces near-zero scores rather than an error, so the exact contract matters:
   emits **Int16, 16 kHz mono, 1280-sample (~80 ms) frames** (`SAMPLES_PER_FRAME` in
   `shared/wake-constants.ts`) over `IpcChannel.WakeAudioFrame`.
 - `electron/wakeword/index.ts` (`WakeWordController`, main thread): forwards frames to the
-  worker, applies a fire threshold (default `0.05`), debounce, and an arm/re-arm gate; pauses
-  during a voice turn and resumes on `voiceTurnEnded`.
+  worker, applies a fire threshold, debounce, and an arm/re-arm gate; pauses during a voice turn
+  and resumes on `voiceTurnEnded`. The threshold is **not** a fixed default — the wake engine
+  runs in the main process, but the "Wake word sensitivity" slider lives in the renderer's
+  Settings page, so it has to be pushed across: `wakeSensitivityToThreshold()` (pure, tested)
+  maps the slider's sense (higher = fires easier) onto the engine's inverted one (score must
+  *exceed* threshold, so lower = fires easier). `WakeWordController` starts **immediately** at
+  boot with its built-in default threshold — it must not be blocked on a Supabase round-trip
+  first. That was tried (`await getVoicePreferences()` before constructing the controller) and
+  is a real regression: it delays orb-window creation, wake-word start, tray, and hotkey
+  registration behind a network call with no timeout, so a slow/unreachable Supabase made wake
+  word (and everything else in that startup sequence) late or effectively never-starting. The
+  saved sensitivity is instead fetched and applied via `wakeController.setThreshold(...)` in the
+  background right after `start()`, non-blocking; `PrefsSet` calls `wake?.setThreshold(...)`
+  again on every change so it takes effect immediately, not just after the next launch. The
+  mapped range is deliberately narrow and
+  floored (real slider domain 0.35..0.85 -> threshold ~0.059..0.037) — this control did nothing
+  until it was wired up, so anyone who'd already dragged it to max thinking it had no effect
+  would otherwise land on a threshold low enough to false-trigger on background noise the moment
+  it started actually working.
+- `src/hooks/useVoice.ts`'s `recordUntilSilence` requires mic level to stay continuously above
+  threshold for `MIN_SUSTAINED_SPEECH_MS` (250ms) before treating it as real speech, not a single
+  noise blip (door, cough, a wake-word false-fire's own tail) — otherwise a one-frame spike
+  immediately produces a short, near-silent recording that STT models are prone to hallucinating
+  plausible-sounding but entirely fabricated text for, which then gets sent to Claude as if the
+  user said it.
 - `electron/wakeword/worker.ts` + `engine.ts`: three-stage ONNX pipeline
   `melspectrogram.onnx → embedding_model.onnx → hey_jarvis_v0.1.onnx`. **Preprocessing the
   models were trained on (all four are required or scores flatline near 0):**

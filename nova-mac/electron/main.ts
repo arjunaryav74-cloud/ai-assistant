@@ -21,13 +21,17 @@ import { createTray } from "./tray";
 import { registerIpcHandlers, registerChatBridge, registerWakeBridge, registerWindowHandlers } from "./ipc";
 import { streamChat, cancelChat } from "./chat";
 import { startSignIn, signOut, getAuthState, handleAuthCallback, restoreSession } from "./auth";
-import { WakeWordController } from "./wakeword/index";
+import { WakeWordController, wakeSensitivityToThreshold } from "./wakeword/index";
 import { IpcChannel } from "@shared/types";
 
 let orbWin: BrowserWindow | null = null;
 let appWin: BrowserWindow | null = null;
 // Hold a reference so the tray is not garbage-collected.
 let _trayRef: ReturnType<typeof createTray> | null = null;
+// Assigned once constructed further down; declared here so the PrefsSet
+// handler (registered earlier in the same startup sequence) can push live
+// sensitivity updates into it.
+let wake: WakeWordController | null = null;
 
 // Siri-style orb lifecycle: the orb window is hidden by default and only
 // appears when something *activates* it — a wake word, a timer, or the user
@@ -50,16 +54,22 @@ let orbHideTimer: ReturnType<typeof setTimeout> | null = null;
 let orbUserPositioned = false;
 let orbMoveIsProgrammatic = false;
 
-/** Wrap any programmatic setBounds/setPosition call so the resulting `moved`
- *  event isn't mistaken for a user drag. */
-function moveOrbProgrammatically(fn: () => void): void {
+/** Wrap any programmatic setBounds/setPosition call — sync or the animated
+ *  async resize — so the `moved`/`move` events it triggers aren't mistaken
+ *  for a user drag. Awaiting it (as `setOrbExpanded` does) means the
+ *  suppression window tracks the *actual* operation instead of guessing a
+ *  fixed timeout long enough to outlast it. */
+async function moveOrbProgrammatically(fn: () => void | Promise<void>): Promise<void> {
   orbMoveIsProgrammatic = true;
-  fn();
-  // Electron delivers `moved` asynchronously; give it a beat to land before
-  // resuming user-drag tracking.
-  setTimeout(() => {
-    orbMoveIsProgrammatic = false;
-  }, 150);
+  try {
+    await fn();
+  } finally {
+    // Give the last native moved/move event a tick to land before resuming
+    // user-drag tracking.
+    setTimeout(() => {
+      orbMoveIsProgrammatic = false;
+    }, 60);
+  }
 }
 
 function clearOrbHideTimer(): void {
@@ -80,10 +90,19 @@ function scheduleOrbAutoHide(delayMs: number): void {
   }, delayMs);
 }
 
-function setOrbExpanded(on: boolean): void {
+/**
+ * Resize the window, THEN tell the renderer to swap MiniOrb <-> the panel.
+ * Broadcasting `OrbExpandedChanged` before the resize finishes (the previous
+ * behavior) mounted the panel's percentage/flex-based layout while the
+ * window was still mid-animation, so it reflowed at every intermediate
+ * window size for ~220ms — the "flashing/freaking out" on click. Waiting
+ * for the real final size means the panel only ever renders once, correctly.
+ */
+async function setOrbExpanded(on: boolean): Promise<void> {
   if (!orbWin || orbWin.isDestroyed()) return;
   orbExpanded = on;
-  moveOrbProgrammatically(() => resizeOrb(orbWin!, on));
+  await moveOrbProgrammatically(() => resizeOrb(orbWin!, on));
+  if (orbWin.isDestroyed()) return;
   orbWin.webContents.send(IpcChannel.OrbExpandedChanged, on);
 }
 
@@ -171,6 +190,9 @@ app.whenReady().then(async () => {
     for (const w of BrowserWindow.getAllWindows()) {
       w.webContents.send(IpcChannel.PrefsChanged, updated.voice);
     }
+    // Wake sensitivity lives in the main process (the wake engine runs
+    // here, not in the renderer) — apply it live instead of only on next launch.
+    wake?.setThreshold(wakeSensitivityToThreshold(updated.voice.wakeWordSensitivity));
     return updated;
   });
 
@@ -214,25 +236,38 @@ app.whenReady().then(async () => {
     import("./memory/manage").then((m) => m.deleteMemoryIpc(id)),
   );
 
-  // Wake-word controller: resolve models dir for dev vs packaged builds
+  // Wake-word controller: resolve models dir for dev vs packaged builds and
+  // start it IMMEDIATELY with the engine's built-in default threshold — do
+  // not block startup on a Supabase round-trip first. That was tried and is
+  // a real regression: it delayed orb-window creation, wake-word start, tray,
+  // and hotkey registration behind a network call with no timeout, so a
+  // slow/unreachable Supabase made wake word (and everything after it in this
+  // startup sequence) late or effectively never-starting. The saved
+  // sensitivity is instead applied a moment later, in the background,
+  // without blocking anything.
   const modelsDir = app.isPackaged
     ? join(process.resourcesPath, "wakeword-models")
     : join(app.getAppPath(), "electron", "wakeword", "models");
-  const wake = new WakeWordController(modelsDir);
-  wake.start(() => {
-    wake.pauseForTurn(); // stop ingesting frames during the voice turn
+  const wakeController = new WakeWordController(modelsDir);
+  wake = wakeController;
+  wakeController.start(() => {
+    wakeController.pauseForTurn(); // stop ingesting frames during the voice turn
     activateOrb(); // pop the mini orb in; auto-hides once the turn settles
     for (const w of BrowserWindow.getAllWindows()) w.webContents.send(IpcChannel.WakeDetected);
   });
+  void import("./voice/preferences")
+    .then((m) => m.getVoicePreferences())
+    .then((prefs) => wakeController.setThreshold(wakeSensitivityToThreshold(prefs.wakeWordSensitivity)))
+    .catch((err) => console.error("[nova] failed to load saved wake sensitivity, using default:", err));
   registerWakeBridge({
-    pushFrame: (buf) => wake.pushFrame(buf),
-    setEnabled: (on) => wake.setEnabled(on),
+    pushFrame: (buf) => wakeController.pushFrame(buf),
+    setEnabled: (on) => wakeController.setEnabled(on),
   });
   // Resume wake detection once the voice turn completes, and — if this
   // appearance was system-triggered and the user never opened the panel —
   // tuck the orb away again after a moment.
   ipcMain.on(IpcChannel.VoiceTurnEnded, () => {
-    wake.resume();
+    wakeController.resume();
     if (orbArmedForAutoHide && !orbExpanded) {
       scheduleOrbAutoHide(1500);
     }
@@ -248,11 +283,21 @@ app.whenReady().then(async () => {
       clearOrbHideTimer();
       orbArmedForAutoHide = false;
       if (on && orbWin && !orbWin.isDestroyed() && !orbWin.isVisible()) {
+        // Window wasn't on screen at all — just appear directly at the
+        // final expanded bounds; there's nothing visible to animate from.
+        // This used to *also* fall through into setOrbExpanded's animated
+        // resize below, which computed its animation assuming the window
+        // was still mini-sized when it had just been jumped straight to
+        // panel size here — a real double-resize conflict that produced
+        // exactly the "freaking out" jank being reported.
+        orbExpanded = true;
         positionOrb(true);
         orbWin.show();
+        orbWin.webContents.send(IpcChannel.OrbExpandedChanged, true);
+        return;
       }
     }
-    setOrbExpanded(on);
+    void setOrbExpanded(on);
     if (!manual && !on && orbArmedForAutoHide) {
       orbWin?.hide();
       orbArmedForAutoHide = false;
@@ -319,6 +364,26 @@ app.whenReady().then(async () => {
   });
   orbWin.on("hide", () => {
     lastMove = null;
+  });
+
+  // Manual drag (the mini orb): the renderer owns the whole gesture — it
+  // reads its own window.screenX/screenY, computes the target position
+  // itself, and just tells us where to put the window every frame. This is
+  // deliberately NOT native OS window-dragging (-webkit-app-region: drag):
+  // that approach made the orb's own click handler unreliable (drag regions
+  // don't consistently deliver mouse events to the page) and gives zero
+  // control over feel (no momentum/easing). Position updates here are
+  // suppressed from the `moved` listener above so they don't double-persist —
+  // OrbDragEnd is the single point that marks the spot as user-chosen.
+  ipcMain.on(IpcChannel.OrbDragMove, (_e, { x, y }: { x: number; y: number }) => {
+    if (!orbWin || orbWin.isDestroyed()) return;
+    moveOrbProgrammatically(() => orbWin!.setPosition(Math.round(x), Math.round(y), false));
+  });
+  ipcMain.on(IpcChannel.OrbDragEnd, () => {
+    if (!orbWin || orbWin.isDestroyed()) return;
+    orbUserPositioned = true;
+    const { x, y } = orbWin.getBounds();
+    saveOrbPosition({ x, y });
   });
 
   // If a monitor gets connected/disconnected/reconfigured, only reposition

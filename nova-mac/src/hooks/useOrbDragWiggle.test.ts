@@ -22,14 +22,14 @@ describe("velocityToWiggle", () => {
 
   it("caps stretch so the orb never grows enough to clip its window", () => {
     const extreme = velocityToWiggle(50, 50);
-    expect(extreme.scaleX).toBeLessThanOrEqual(1.16);
-    expect(extreme.scaleY).toBeGreaterThanOrEqual(1 - 0.16 * 0.6 - 1e-9);
+    expect(extreme.scaleX).toBeLessThanOrEqual(1.09);
+    expect(extreme.scaleY).toBeGreaterThanOrEqual(1 - 0.09 * 0.5 - 1e-9);
   });
 
   it("scales up smoothly with speed below the cap", () => {
     const slow = velocityToWiggle(0.001, 0);
     const fast = velocityToWiggle(0.002, 0);
     expect(fast.scaleX).toBeGreaterThan(slow.scaleX);
-    expect(fast.scaleX).toBeLessThan(1.16);
+    expect(fast.scaleX).toBeLessThan(1.09);
   });
 });

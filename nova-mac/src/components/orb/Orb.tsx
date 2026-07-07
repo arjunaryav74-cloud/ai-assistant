@@ -155,6 +155,10 @@ export function Orb({ state, level, onExpand, onCollapse, onSend }: OrbProps) {
         <motion.div
           animate={{ scale: active ? 1 : 0.92 }}
           transition={appleSpring}
+          whileHover={{ scale: (active ? 1 : 0.92) * 1.04 }}
+          onClick={onCollapse}
+          title="Collapse to orb"
+          style={{ cursor: "pointer", WebkitAppRegion: "no-drag" } as React.CSSProperties}
         >
           <motion.div
             animate={{ scaleX: wiggle.scaleX, scaleY: wiggle.scaleY, rotate: wiggle.rotate }}

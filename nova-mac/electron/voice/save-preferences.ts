@@ -26,42 +26,60 @@ function rowToProactive(row: Record<string, unknown> | null): ProactivePrefs {
   };
 }
 
+// Every write here THROWS on a Supabase error instead of swallowing it —
+// PrefsSet's ipcMain.handle propagates that rejection back to the renderer,
+// which is what lets SettingsPage's existing try/catch actually show "Save
+// failed" instead of a false "Saved" when a write silently didn't happen.
+
 export async function saveVoicePreferences(patch: Partial<VoicePreferences>): Promise<void> {
   const supabase = getSupabase();
   const userId = await getUserId();
-  const { data: existing } = await supabase
+  const { data: existing, error: readError } = await supabase
     .from("user_preferences")
     .select("voice")
     .eq("user_id", userId)
-    .single();
+    .maybeSingle();
+  if (readError) {
+    console.error("[nova] saveVoicePreferences: read existing failed:", readError);
+    throw new Error(`Reading existing voice prefs failed: ${readError.message}`);
+  }
 
   const merged = { ...(existing?.voice ?? {}), ...patch };
 
-  await supabase
+  const { error: writeError } = await supabase
     .from("user_preferences")
     .upsert({ user_id: userId, voice: merged }, { onConflict: "user_id" });
+  if (writeError) {
+    console.error("[nova] saveVoicePreferences: upsert failed:", writeError, "userId:", userId);
+    throw new Error(`Saving voice prefs failed: ${writeError.message}`);
+  }
 }
 
 export async function saveProactivePreferences(patch: Partial<ProactivePrefs>): Promise<void> {
   const supabase = getSupabase();
   const userId = await getUserId();
-  await supabase
+  const { error } = await supabase
     .from("user_preferences")
     .upsert({ user_id: userId, ...proactiveToRow(patch) }, { onConflict: "user_id" });
+  if (error) {
+    console.error("[nova] saveProactivePreferences: upsert failed:", error, "userId:", userId);
+    throw new Error(`Saving proactive prefs failed: ${error.message}`);
+  }
 }
 
 export async function getAllPreferences(): Promise<{ voice: VoicePreferences; proactive: ProactivePrefs }> {
   const { getVoicePreferences } = await import("./preferences");
   const supabase = getSupabase();
   const userId = await getUserId();
-  const { data } = await supabase
+  const { data, error } = await supabase
     .from("user_preferences")
     .select("proactive_tier, brief_enabled, brief_time_local, timezone, quiet_hours_start, quiet_hours_end")
     .eq("user_id", userId)
-    .single();
+    .maybeSingle();
+  if (error) console.error("[nova] getAllPreferences (proactive) failed:", error.message);
 
   return {
     voice: await getVoicePreferences(),
-    proactive: rowToProactive(data as Record<string, unknown> | null),
+    proactive: rowToProactive(error ? null : (data as Record<string, unknown> | null)),
   };
 }

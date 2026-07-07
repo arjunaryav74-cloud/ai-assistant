@@ -34,6 +34,11 @@ export enum IpcChannel {
   OrbExpandedChanged = "orb:expandedChanged",
   /** Main broadcasts live drag velocity while the user is dragging the orb window. */
   OrbDragVelocity = "orb:dragVelocity",
+  /** Renderer-driven manual drag (the mini orb): move the window to an absolute
+   *  screen position every frame, then signal when the drag (+ momentum coast)
+   *  has finished so the final spot gets persisted. */
+  OrbDragMove = "orb:dragMove",
+  OrbDragEnd = "orb:dragEnd",
   // Preferences push
   PrefsChanged = "prefs:changed",
   // Prefs get/set (used by Settings tab — wired in Task 7)
@@ -166,8 +171,13 @@ export type OpenAiTtsModel = "gpt-4o-mini-tts" | "tts-1" | "tts-1-hd";
 export type GoogleVoiceQuality = "low" | "medium" | "high";
 export type GoogleSttModel = "latest_long" | "latest_short" | "chirp_2";
 
+/** "auto" keeps the built-in light/heavy routing (voice always light, text
+ *  routed by inferComplexity); "light"/"heavy" pin every turn to that model. */
+export type ModelPreference = "auto" | "light" | "heavy";
+
 export interface VoicePreferences {
   interactionMode: VoiceInteractionMode;
+  modelPreference: ModelPreference;
   autoSendOnEndOfTurn: boolean;
   silenceMs: number;
   spokenReplies: boolean;
@@ -248,6 +258,7 @@ export interface MemoryItem {
 
 export const DEFAULT_VOICE_PREFERENCES: VoicePreferences = {
   interactionMode: "wake_word",
+  modelPreference: "auto",
   autoSendOnEndOfTurn: true,
   silenceMs: 900,
   spokenReplies: true,

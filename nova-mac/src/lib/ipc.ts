@@ -32,6 +32,8 @@ export interface NovaBridge {
   orbSetExpanded(on: boolean, manual?: boolean): void;
   onOrbExpandedChanged(cb: (on: boolean) => void): () => void;
   onOrbDragVelocity(cb: (p: import("@shared/types").OrbDragVelocityEvent) => void): () => void;
+  orbDragMove(x: number, y: number): void;
+  orbDragEnd(): void;
   appOpen(): void;
   appClose(): void;
   onPrefsChanged(cb: (p: unknown) => void): () => void;
